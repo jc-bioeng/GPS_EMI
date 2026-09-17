@@ -25,7 +25,7 @@ def find_vehicle(vehicles: Iterable[Vehicle], identifier: str) -> Vehicle:
     key = identifier.strip().casefold()
     matches = [vehicle for vehicle in vehicles if key and any(
         value.strip().casefold() == key
-        for value in (vehicle.plate, vehicle.mobile_name)
+        for value in (vehicle.plate, vehicle.mobile_number)
     )]
     if not matches:
         raise VehicleNotFoundError("No se encontró el móvil entre Ambulancias Medellín.")

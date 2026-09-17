@@ -45,6 +45,8 @@ tests/
     test_widetech_parser.py
     test_cli.py
     test_vehicle_resolution.py
+    fixtures/
+        emi_amb20.json
 gpspace_loaddatalog.py
 pyproject.toml
 pytest.ini
@@ -98,25 +100,35 @@ Después de instalar el paquete también se puede ejecutar `gps-emi` o
 entrada al monitor: ya no imprime el listado completo de vehículos y coordenadas.
 `--plate` permanece como alias de `--identifier` para compatibilidad con I1.
 
-El modelo conserva `plate` desde `VEH_LCNS` y `mobile_name` desde `VEH_NAM`,
-sin sustituir un campo por el otro. Si falta un campo queda vacío. Antes I1 usaba
-`VEH_LCNS` o, en su ausencia, `VEH_NAM`, ambos bajo el nombre `plate`.
-Los fixtures existentes son sintéticos: no prueban que `VEH_LCNS` siempre sea una
-placa legal ni en cuál campo llegó el `AMB-20` validado manualmente. Por eso no se
-deduce el tipo de identificador por su formato ni se inventan correspondencias.
+El modelo conserva los identificadores por separado con la correspondencia
+empíricamente observada y utilizada actualmente por EMI/GPSpace:
+
+| Campo WideTech | Campo Vehicle | Significado utilizado |
+| --- | --- | --- |
+| `VEHID` | `vehid` | Identificador del vehículo |
+| `VEH_LCNS` | `mobile_number` | Número/código de móvil |
+| `VEH_NAM` | `plate` | Placa física |
+
+La validación manual del registro `VEHID=433909` devolvió `VEH_LCNS=AMB-20`
+y `VEH_NAM=PJU886`. Operacionalmente, AMB-20 es el número de móvil y PJU886
+es su placa. Esta evidencia respalda el mapping actual del adaptador, pero **no
+constituye una garantía universal ni un contrato oficial de WideTech**.
+Si falta un campo queda vacío; no se intercambian campos ni se deduce su significado
+por el formato. `Vehicle` conserva además `gps_timestamp`, `location`, `speed`,
+`ignition`, `gps_fix` y `zones`.
 
 `find_vehicle(vehicles, identifier)` busca en ambos campos con `strip()` y
 comparación sin distinción de mayúsculas. Recibe la lista ya filtrada por
 `WideTechClient.get_vehicles()`; el filtro exacto de flota se mantiene. Cero
 coincidencias informa que no se encontró el móvil; varias informa identificador
 ambiguo y detiene la operación, incluso si coinciden campos distintos. Coincidir
-en ambos campos del mismo vehículo cuenta una vez. No se prioriza placa sobre nombre.
+en ambos campos del mismo vehículo cuenta una vez. No se prioriza placa sobre número.
 
 La selección se resuelve antes de crear el monitor y en cada consulta. El archivo
-`ArrivalMonitor` y sus reglas no cambian. Para registros sin `VEH_LCNS`, una pequeña
-adaptación conserva el respaldo histórico únicamente en la copia que recibe su
+`ArrivalMonitor` y sus reglas no cambian. Para registros sin placa (`VEH_NAM`), una pequeña
+adaptación utiliza el número de móvil (`VEH_LCNS`) únicamente en la copia que recibe su
 interfaz de I1, que exige `plate` no vacío. El modelo resuelto y el evento que recibe
-el notificador conservan los campos originales separados. La consola usa el nombre
+el notificador conservan los campos originales separados. La consola usa el número
 de móvil si no hay placa disponible.
 
 La primera lectura establece `OUTSIDE` o `INSIDE` y no produce evento. Solo una
@@ -145,7 +157,10 @@ headers autenticados.
 
 `pytest.ini` configura el directorio `src` y deshabilita `pytest-dotenv`.
 Las pruebas bloquean las peticiones de red, eliminan las variables de autenticación
-heredadas y sustituyen la carga de `.env`. Los ejemplos de telemetría son sintéticos.
+heredadas y sustituyen la carga de `.env`. Los ejemplos de telemetría son sintéticos,
+salvo `tests/fixtures/emi_amb20.json`, que contiene exclusivamente los cuatro valores
+no sensibles observados: VEHID, VEH_LCNS, VEH_NAM y fltName. Sus pruebas verifican el
+mapping y que buscar AMB-20 o PJU886 devuelva el mismo objeto Vehicle con VEHID 433909.
 Los valores de prueba de autenticación se generan temporalmente en memoria;
 no se almacenan cookies en fixtures. Se cubren las diez situaciones de aceptación,
 coincidencia exacta, ausencia de duplicados, parser con Sensors anidados, HTML,

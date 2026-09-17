@@ -8,7 +8,7 @@ from gps_emi.providers import widetech as wt
 
 SAMPLE = r"""{'Rows': [
 {'Sensors': [{'GPSFix': 99, 'Location': 'nested } ], {', 'Zones': 'wrong'}],
- 'VEHID': 106, 'VEH_LCNS': 'AMB-106', 'VEH_NAM': 'Fallback',
+ 'VEHID': 106, 'VEH_LCNS': 'AMB-106', 'VEH_NAM': 'ABC123',
  'Fecha': new Date(2026,8,17,10,22,31), 'FechaInsert': null,
  'Location': '<b>Medellín</b>, O\'Brien {calle}; "sur"',
  'Velocidad': 12.5, 'GPSFix': 0, 'StateIgnition': true,
@@ -33,8 +33,8 @@ def test_observed_fields_and_normalization():
     assert row['Zones'] == ' Z - {ZONA 2 - POBLADO}; Z - {EMI_Medellin_Taller}'
     vehicle = wt.normalize_vehicle(row)
     assert vehicle.vehid == '106'
-    assert vehicle.plate == 'AMB-106'
-    assert vehicle.mobile_name == 'Fallback'
+    assert vehicle.plate == 'ABC123'
+    assert vehicle.mobile_number == 'AMB-106'
     assert vehicle.gps_timestamp == row['Fecha']
     assert vehicle.location == row['Location']
     assert vehicle.speed == 12.5
@@ -44,9 +44,9 @@ def test_observed_fields_and_normalization():
 
 
 def test_double_quotes_empty_and_fallback():
-    row = wt.parse('{"Rows":[{"VEHID":1,"VEH_NAM":"amb-106","Zones":null}]}')[0]
+    row = wt.parse('{"Rows":[{"VEHID":1,"VEH_LCNS":"amb-106","Zones":null}]}')[0]
     assert wt.normalize_vehicle(row).plate == ''
-    assert wt.normalize_vehicle(row).mobile_name == 'amb-106'
+    assert wt.normalize_vehicle(row).mobile_number == 'amb-106'
     assert wt.normalize_vehicle(row).display_identifier == 'amb-106'
     assert wt.normalize_vehicle(row).zones == []
     assert wt.parse("{'Rows':[]}") == []
@@ -81,12 +81,29 @@ def test_http_contract_and_fleet_filter(monkeypatch):
         return response(SAMPLE)
     monkeypatch.setattr(wt.requests, 'post', post)
     vehicles = wt.WideTechClient().get_vehicles()
-    assert [v.plate for v in vehicles] == ['AMB-106']
+    assert [v.plate for v in vehicles] == ['ABC123']
+    assert [v.mobile_number for v in vehicles] == ['AMB-106']
 
 
 def test_missing_authentication():
     with pytest.raises(wt.WideTechError, match='Falta la variable'):
         wt.WideTechClient().get_vehicles()
+
+
+def test_empirically_observed_identifier_mapping(observed_amb20_payload):
+    row = wt.parse(observed_amb20_payload)[0]
+    assert row['fltName'] == wt.TARGET_FLEET
+    vehicle = wt.normalize_vehicle(row)
+    assert vehicle.vehid == '433909'
+    assert vehicle.mobile_number == 'AMB-20'
+    assert vehicle.plate == 'PJU886'
+
+
+def test_plate_only_does_not_become_mobile_number():
+    vehicle = wt.normalize_vehicle({'VEHID': 1, 'VEH_NAM': ' pju886 '})
+    assert vehicle.plate == 'PJU886'
+    assert vehicle.mobile_number == ''
+    assert vehicle.display_identifier == 'PJU886'
 
 
 @pytest.mark.parametrize('failure,expected', [

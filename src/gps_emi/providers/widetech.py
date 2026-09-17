@@ -189,8 +189,9 @@ def normalize_vehicle(row):
     speed = row.get("Velocidad")
     return Vehicle(
         vehid=str(row.get("VEHID") or ""),
-        plate=normalize_plate(str(row.get("VEH_LCNS") or "")),
-        mobile_name=str(row.get("VEH_NAM") or "").strip(),
+        # Correspondencia observada en EMI/GPSpace; no es un contrato de WideTech.
+        plate=normalize_plate(str(row.get("VEH_NAM") or "")),
+        mobile_number=str(row.get("VEH_LCNS") or "").strip(),
         gps_timestamp=timestamp if isinstance(timestamp, datetime) else None,
         location=row.get("Location"),
         speed=float(speed) if speed not in (None, "") else None,
