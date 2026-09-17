@@ -16,6 +16,11 @@ class Vehicle:
     ignition: bool | int | str | None = None
     gps_fix: bool | int | str | None = None
     zones: list[str] = field(default_factory=list)
+    mobile_name: str = ""
+
+    @property
+    def display_identifier(self) -> str:
+        return self.plate or self.mobile_name
 
 
 @dataclass(frozen=True)

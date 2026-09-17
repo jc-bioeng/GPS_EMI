@@ -34,6 +34,7 @@ def test_observed_fields_and_normalization():
     vehicle = wt.normalize_vehicle(row)
     assert vehicle.vehid == '106'
     assert vehicle.plate == 'AMB-106'
+    assert vehicle.mobile_name == 'Fallback'
     assert vehicle.gps_timestamp == row['Fecha']
     assert vehicle.location == row['Location']
     assert vehicle.speed == 12.5
@@ -44,7 +45,9 @@ def test_observed_fields_and_normalization():
 
 def test_double_quotes_empty_and_fallback():
     row = wt.parse('{"Rows":[{"VEHID":1,"VEH_NAM":"amb-106","Zones":null}]}')[0]
-    assert wt.normalize_vehicle(row).plate == 'AMB-106'
+    assert wt.normalize_vehicle(row).plate == ''
+    assert wt.normalize_vehicle(row).mobile_name == 'amb-106'
+    assert wt.normalize_vehicle(row).display_identifier == 'amb-106'
     assert wt.normalize_vehicle(row).zones == []
     assert wt.parse("{'Rows':[]}") == []
 

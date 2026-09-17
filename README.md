@@ -1,6 +1,7 @@
 # GPS EMI — Incremento I1
 
-Monitor de consola para **una placa** de Ambulancias Medellín y **un destino**.
+Monitor de consola para **una ambulancia**, seleccionada por **placa o número de móvil**,
+de Ambulancias Medellín y **un destino**.
 Utiliza la pertenencia a geocercas reportada por WideTech en `Zones`: no calcula
 distancias, no utiliza coordenadas para decidir llegadas y no garantiza posición actual.
 
@@ -13,7 +14,7 @@ Destinos admitidos, por nombre exacto:
 
 ## Arquitectura
 
-`WideTechClient → Vehicle → ArrivalMonitor → ArrivalEvent → NotificationService → ConsoleNotifier`
+`WideTechClient → Vehicle → find_vehicle → ArrivalMonitor → ArrivalEvent → NotificationService → ConsoleNotifier`
 
 El adaptador concentra autenticación, petición, parser y normalización. Devuelve
 exclusivamente registros cuyo `fltName` sea `Ambulancias Medellin;44986;0`.
@@ -25,6 +26,7 @@ mínimo para añadir otro canal en el futuro sin alterar el monitor.
 src/gps_emi/
     __init__.py
     models.py
+    resolution.py
     cli.py
     providers/
         __init__.py
@@ -32,6 +34,7 @@ src/gps_emi/
     monitoring/
         __init__.py
         arrival.py
+        observation.py
     notifications/
         __init__.py
         base.py
@@ -41,6 +44,7 @@ tests/
     test_arrival_monitor.py
     test_widetech_parser.py
     test_cli.py
+    test_vehicle_resolution.py
 gpspace_loaddatalog.py
 pyproject.toml
 pytest.ini
@@ -81,27 +85,50 @@ Modo interactivo:
 .\.venv\Scripts\python.exe gpspace_loaddatalog.py
 ```
 
-Con argumentos (sustituir la placa de ejemplo por una placa real de la flota):
+La consola solicita `Placa o número de móvil:`. Con argumentos (sustituir el
+identificador de ejemplo por una placa o número de móvil real de la flota):
 
 ```powershell
-.\.venv\Scripts\python.exe gpspace_loaddatalog.py --plate AMB-106 --destination "EMI_Medellin_Taller" --interval 30
-.\.venv\Scripts\python.exe gpspace_loaddatalog.py --plate AMB-106 --destination "EMI Medellin_Poblado" --interval 30
+.\.venv\Scripts\python.exe gpspace_loaddatalog.py --identifier AMB-20 --destination "EMI_Medellin_Taller" --interval 30
+.\.venv\Scripts\python.exe gpspace_loaddatalog.py --identifier DEU942 --destination "EMI Medellin_Poblado" --interval 30
 ```
 
 Después de instalar el paquete también se puede ejecutar `gps-emi` o
 `python -m gps_emi.cli` con los mismos argumentos. El script original ahora es una
 entrada al monitor: ya no imprime el listado completo de vehículos y coordenadas.
+`--plate` permanece como alias de `--identifier` para compatibilidad con I1.
+
+El modelo conserva `plate` desde `VEH_LCNS` y `mobile_name` desde `VEH_NAM`,
+sin sustituir un campo por el otro. Si falta un campo queda vacío. Antes I1 usaba
+`VEH_LCNS` o, en su ausencia, `VEH_NAM`, ambos bajo el nombre `plate`.
+Los fixtures existentes son sintéticos: no prueban que `VEH_LCNS` siempre sea una
+placa legal ni en cuál campo llegó el `AMB-20` validado manualmente. Por eso no se
+deduce el tipo de identificador por su formato ni se inventan correspondencias.
+
+`find_vehicle(vehicles, identifier)` busca en ambos campos con `strip()` y
+comparación sin distinción de mayúsculas. Recibe la lista ya filtrada por
+`WideTechClient.get_vehicles()`; el filtro exacto de flota se mantiene. Cero
+coincidencias informa que no se encontró el móvil; varias informa identificador
+ambiguo y detiene la operación, incluso si coinciden campos distintos. Coincidir
+en ambos campos del mismo vehículo cuenta una vez. No se prioriza placa sobre nombre.
+
+La selección se resuelve antes de crear el monitor y en cada consulta. El archivo
+`ArrivalMonitor` y sus reglas no cambian. Para registros sin `VEH_LCNS`, una pequeña
+adaptación conserva el respaldo histórico únicamente en la copia que recibe su
+interfaz de I1, que exige `plate` no vacío. El modelo resuelto y el evento que recibe
+el notificador conservan los campos originales separados. La consola usa el nombre
+de móvil si no hay placa disponible.
 
 La primera lectura establece `OUTSIDE` o `INSIDE` y no produce evento. Solo una
 transición observada `OUTSIDE → INSIDE` produce `ARRIVAL_DETECTED`. El notificador
 muestra la llegada y la CLI termina. El monitor no vuelve a emitir eventos.
-Las placas se comparan sin distinguir mayúsculas y quitando espacios exteriores;
+La placa o número de móvil se compara sin distinguir mayúsculas y quitando espacios exteriores;
 no se eliminan guiones. Las geocercas se comparan exactamente.
 
 El intervalo predeterminado es 30 segundos de espera **después** de cada consulta;
 el tiempo HTTP se suma al ciclo. Debe ser finito y positivo. Ctrl+C termina sin
-traceback (código 130). Errores de consulta, placa inexistente/duplicada o desaparición
-de la placa detienen la vigilancia (código 1), sin inventar una salida de geocerca.
+traceback (código 130). Errores de consulta, identificador inexistente/ambiguo o desaparición
+del móvil detienen la vigilancia (código 1), sin inventar una salida de geocerca.
 Una llegada termina con código 0. Reiniciar comienza una vigilancia nueva.
 
 Si no se ha iniciado sesión en GPSpace o la cookie ya expiró, la consola indica
@@ -136,8 +163,8 @@ El timeout es de 60 segundos y las redirecciones se rechazan para evitar continu
 una consulta autenticada hacia otro destino.
 
 El parser extrae campos sin ejecutar JavaScript. Conserva el formato observado
-`new Date(año, mes desde cero, día, hora, minuto, segundo)` y el respaldo `VEH_NAM`
-cuando falta `VEH_LCNS`. Ignora campos anidados de Sensors al buscar claves del
+`new Date(año, mes desde cero, día, hora, minuto, segundo)` y conserva por separado
+`VEH_LCNS` y `VEH_NAM`. Ignora campos anidados de Sensors al buscar claves del
 vehículo y rechaza respuestas sin Rows o con Rows incompleto. No es un intérprete
 general de JavaScript. Nuevos formatos de fechas necesitan muestras y pruebas;
 una fecha no reconocida se muestra como no disponible. No se infiere zona horaria
@@ -149,7 +176,7 @@ antigüedad ni descarta lecturas por GPSFix: el usuario debe revisar la fecha.
 Una transición con reportes antiguos o desordenados aún puede producir un evento.
 Tampoco se detectan entradas y salidas completas ocurridas entre dos consultas.
 No hay reintentos, persistencia, múltiples vigilancias ni política de continuidad
-si cambia el VEHID asociado a una placa. La validación automatizada utiliza HTTP
+si cambia el VEHID asociado a una placa o número de móvil. La validación automatizada utiliza HTTP
 simulado; hace falta una prueba manual con sesión vigente para confirmar el servicio.
 
 ## Pendiente

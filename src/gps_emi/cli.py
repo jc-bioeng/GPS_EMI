@@ -5,11 +5,12 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 
-from gps_emi.models import normalize_plate
 from gps_emi.monitoring.arrival import ArrivalMonitor, DESTINATIONS
+from gps_emi.monitoring.observation import observe_resolved_vehicle
 from gps_emi.notifications.base import NotificationService
 from gps_emi.notifications.console import ConsoleNotifier
 from gps_emi.providers.widetech import WideTechClient, WideTechError
+from gps_emi.resolution import find_vehicle, VehicleResolutionError
 
 
 def positive_interval(value):
@@ -22,19 +23,19 @@ def positive_interval(value):
     return interval
 
 
-def watch(client, plate: str, destination: str, interval: float,
+def watch(client, identifier: str, destination: str, interval: float,
           notifier: NotificationService, sleep=time.sleep) -> int:
-    monitor = ArrivalMonitor(plate, destination)
-    print(f"Vigilando {monitor.plate} → {destination}")
+    monitor = None
     while True:
-        matches = [v for v in client.get_vehicles()
-                   if normalize_plate(v.plate) == monitor.plate]
-        if len(matches) != 1:
-            print("ERROR: la placa no existe o no es única entre Ambulancias Medellín. "
-                  "Vigilancia detenida; no se infiere una salida de geocerca.")
+        try:
+            vehicle = find_vehicle(client.get_vehicles(), identifier)
+        except VehicleResolutionError as error:
+            print(f"ERROR: {error} Vigilancia detenida; no se infiere una salida de geocerca.")
             return 1
-        vehicle = matches[0]
-        event = monitor.observe(vehicle)
+        if monitor is None:
+            monitor = ArrivalMonitor(vehicle.display_identifier, destination)
+            print(f"Vigilando {identifier.strip()} → {destination}")
+        event = observe_resolved_vehicle(monitor, vehicle)
         membership = "INSIDE" if destination in vehicle.zones else "OUTSIDE"
         print(f"[{datetime.now():%H:%M:%S}] {membership} | última posición reportada: "
               f"{vehicle.gps_timestamp or 'fecha no disponible'} | GPSFix={vehicle.gps_fix}")
@@ -53,16 +54,18 @@ def watch(client, plate: str, destination: str, interval: float,
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="GPS EMI — Monitor de llegada")
-    parser.add_argument("--plate", help="Placa de una ambulancia Medellín")
+    parser.add_argument("--identifier", "--plate", dest="identifier",
+                        help="Placa o número de móvil de una ambulancia Medellín")
     parser.add_argument("--destination", choices=DESTINATIONS)
     parser.add_argument("--interval", type=positive_interval, default=30.0,
                         help="Segundos entre consultas (predeterminado: 30)")
     args = parser.parse_args(argv)
     try:
         print("GPS EMI — Monitor de llegada")
-        plate = normalize_plate(args.plate if args.plate is not None else input("Placa: "))
-        if not plate:
-            print("ERROR: introduzca una placa.")
+        identifier = (args.identifier if args.identifier is not None
+                      else input("Placa o número de móvil: ")).strip().upper()
+        if not identifier:
+            print("ERROR: introduzca una placa o número de móvil.")
             return 1
         destination = args.destination
         if destination is None:
@@ -74,7 +77,7 @@ def main(argv=None) -> int:
             destination = DESTINATIONS[int(choice) - 1]
         # Solo en ejecución explícita de CLI. Nunca al importar ni en el dominio.
         load_dotenv(dotenv_path=".env", override=False)
-        return watch(WideTechClient(), plate, destination, args.interval, ConsoleNotifier())
+        return watch(WideTechClient(), identifier, destination, args.interval, ConsoleNotifier())
     except (KeyboardInterrupt, EOFError):
         print("\nVigilancia cancelada.")
         return 130

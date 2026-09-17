@@ -189,7 +189,8 @@ def normalize_vehicle(row):
     speed = row.get("Velocidad")
     return Vehicle(
         vehid=str(row.get("VEHID") or ""),
-        plate=normalize_plate(str(row.get("VEH_LCNS") or row.get("VEH_NAM") or "")),
+        plate=normalize_plate(str(row.get("VEH_LCNS") or "")),
+        mobile_name=str(row.get("VEH_NAM") or "").strip(),
         gps_timestamp=timestamp if isinstance(timestamp, datetime) else None,
         location=row.get("Location"),
         speed=float(speed) if speed not in (None, "") else None,
