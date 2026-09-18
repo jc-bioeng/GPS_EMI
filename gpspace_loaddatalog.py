@@ -1,4 +1,4 @@
-"""Entrada compatible: ahora inicia el monitor I1 de una placa."""
+"""Entrada de consola al monitor de llegada de una ambulancia."""
 from pathlib import Path
 import sys
 

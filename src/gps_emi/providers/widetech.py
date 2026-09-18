@@ -9,6 +9,11 @@ from datetime import datetime
 import requests
 
 from gps_emi.models import Vehicle, normalize_plate
+from gps_emi.errors import (
+    AcquisitionError, TransientAcquisitionError, SessionExpiredError,
+    MissingCredentialsError, InvalidResponseError, HTTPAcquisitionError,
+    TransientHTTPError, EmptyResponseError,
+)
 
 URL = "https://gpspace.app/EMI/ajax/Widetech.WEB.OnLine,Widetech.ashx"
 PARAMETERS = "REMOVED_HISTORICAL_SESSION_MATERIAL"
@@ -22,8 +27,9 @@ FIELDS = (
 )
 
 
-class WideTechError(RuntimeError):
-    """Error seguro: nunca incluye cuerpos, cookies ni excepciones HTTP."""
+# Nombre público de I1 conservado para quienes ya capturan esta excepción.
+WideTechError = AcquisitionError
+TRANSIENT_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 
 
 class WideTechClient:
@@ -36,7 +42,7 @@ class WideTechClient:
     def load_data_log(self):
         cookie = os.getenv("GPSPACE_COOKIE", "").strip()
         if not cookie:
-            raise WideTechError("Falta la variable de entorno GPSPACE_COOKIE.")
+            raise MissingCredentialsError()
         headers = {
             "Accept": "*/*",
             "Content-Type": os.getenv("GPSPACE_CONTENT_TYPE", "text/plain;charset=UTF-8"),
@@ -44,7 +50,7 @@ class WideTechClient:
             "User-Agent": "Mozilla/5.0",
             "Cookie": cookie,
         }
-        error_message = None
+        error = None
         try:
             response = requests.post(
                 URL, params={"_method": "LoadDataLog", "_session": "rw"},
@@ -53,33 +59,39 @@ class WideTechClient:
             )
             with response:
                 if response.status_code in (401, 403) or 300 <= response.status_code < 400:
-                    error_message = (
-                        "La sesión de GPSpace no es válida o expiró. "
-                        "Inicie sesión en GPSpace y actualice GPSPACE_COOKIE."
-                    )
+                    error = SessionExpiredError()
+                elif response.status_code in TRANSIENT_HTTP_STATUSES:
+                    error = TransientHTTPError(response.status_code)
                 elif response.status_code != 200:
-                    error_message = (
-                        "WideTech no respondió correctamente "
-                        f"(HTTP {response.status_code}). Inténtelo de nuevo."
-                    )
+                    error = HTTPAcquisitionError(response.status_code)
                 else:
                     payload = response.text
+        except (requests.Timeout, requests.ConnectionError,
+                requests.exceptions.ChunkedEncodingError,
+                requests.exceptions.ContentDecodingError):
+            error = TransientAcquisitionError()
         except requests.RequestException:
-            error_message = (
-                "No se pudo conectar con GPSpace. Revise la conexión a Internet e inténtelo de nuevo."
-            )
+            error = AcquisitionError("No se pudo conectar con GPSpace: error de petición no recuperable.")
         # Fuera del except para no conservar una excepción con petición autenticada.
-        if error_message:
-            raise WideTechError(error_message)
+        if error is not None:
+            raise error
         return payload
 
     def get_vehicles(self) -> list[Vehicle]:
         payload = self.load_data_log()
+        if not payload.strip():
+            raise EmptyResponseError()
         if not re.search(r"['\"]Rows['\"]\s*:\s*\[", payload):
-            raise WideTechError(
-                "GPSpace no devolvió datos de vehículos. La sesión puede haber expirado: "
-                "inicie sesión en GPSpace y actualice GPSPACE_COOKIE."
-            )
+            # Solo inspeccionar indicadores de login cuando no hay Rows; Location
+            # puede incluir HTML/texto arbitrario en una respuesta válida.
+            if re.search(
+                r"type\s*=\s*['\"]?password\b|\blogin\b|\biniciar\s+sesi[oó]n\b|"
+                r"\bunauthorized\b|\bsession\s+(?:expired|invalid)\b|"
+                r"\bsesi[oó]n\s+(?:expirada|inv[aá]lida)\b",
+                payload, re.I,
+            ):
+                raise SessionExpiredError()
+            raise InvalidResponseError()
         failed = False
         try:
             rows = parse(payload)
@@ -88,7 +100,7 @@ class WideTechClient:
         except (ValueError, TypeError, OverflowError):
             failed = True
         if failed:
-            raise WideTechError("Respuesta WideTech no reconocida. Revise sesión o formato del proveedor.")
+            raise InvalidResponseError()
         return vehicles
 
 

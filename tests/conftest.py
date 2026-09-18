@@ -1,6 +1,10 @@
 import pytest
 import requests
 from pathlib import Path
+from datetime import datetime
+import logging
+import socket
+import time
 
 
 @pytest.fixture
@@ -10,10 +14,15 @@ def observed_amb20_payload():
 
 
 @pytest.fixture(autouse=True)
-def offline(monkeypatch):
+def offline(monkeypatch, caplog):
     def forbidden(*args, **kwargs):
-        raise AssertionError("Las pruebas no permiten conexiones de red")
+        pytest.fail("Las pruebas no permiten conexiones de red ni esperas reales")
     monkeypatch.setattr(requests.sessions.Session, "request", forbidden)
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(time, "sleep", forbidden)
     monkeypatch.delenv("GPSPACE_COOKIE", raising=False)
     monkeypatch.delenv("GPSPACE_CONTENT_TYPE", raising=False)
     monkeypatch.setattr("gps_emi.cli.load_dotenv", lambda **kwargs: None)
+    monkeypatch.setattr("gps_emi.cli.configure_logging", lambda level: None)
+    monkeypatch.setattr("gps_emi.monitoring.runner.local_now", lambda: datetime(2026, 9, 17, 12, 35))
+    caplog.set_level(logging.INFO, logger="gps_emi")

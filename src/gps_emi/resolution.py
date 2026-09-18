@@ -34,3 +34,13 @@ def find_vehicle(vehicles: Iterable[Vehicle], identifier: str) -> Vehicle:
             "El identificador es ambiguo: coincide con varios móviles de Ambulancias Medellín."
         )
     return matches[0]
+
+
+def find_vehicle_by_id(vehicles: Iterable[Vehicle], vehid: str) -> Vehicle:
+    """Continuidad de una vigilancia ya resuelta, sobre la misma flota filtrada."""
+    matches = [vehicle for vehicle in vehicles if vehicle.vehid == vehid]
+    if not matches:
+        raise VehicleNotFoundError("El VEHID vigilado no aparece temporalmente en la consulta.")
+    if len(matches) > 1:
+        raise AmbiguousVehicleError("El VEHID vigilado es ambiguo en la respuesta.")
+    return matches[0]

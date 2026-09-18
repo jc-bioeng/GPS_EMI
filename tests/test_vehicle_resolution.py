@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -48,7 +49,7 @@ def test_provider_fields_remain_separate_without_inferred_mapping():
 
 
 @pytest.mark.parametrize('identifier', ['OUTSIDE-PLATE', 'OUTSIDE-MOBILE'])
-def test_other_fleet_cannot_be_selected(monkeypatch, identifier, capsys):
+def test_other_fleet_cannot_be_selected(monkeypatch, identifier, caplog):
     payload = """{'Rows':[
         {'VEHID':1,'VEH_LCNS':'AMB-20','VEH_NAM':'DEU942',
          'fltName':'Ambulancias Medellin;44986;0'},
@@ -61,15 +62,16 @@ def test_other_fleet_cannot_be_selected(monkeypatch, identifier, capsys):
     notifier = Mock()
     assert cli.watch(client, identifier, DESTINATIONS[0], 30, notifier, Mock()) == 1
     notifier.send_arrival.assert_not_called()
-    assert 'No se encontró el móvil' in capsys.readouterr().out
+    assert 'No se encontró el móvil' in caplog.text
 
 
 @pytest.mark.parametrize('plate', ['DEU942', ''])
 @pytest.mark.parametrize('sequence', [[False, True], [True, True, False, True]])
 def test_monitoring_by_mobile_keeps_transition_and_original_event(plate, sequence):
     vehicle = Vehicle('1', plate, mobile_number='AMB-20')
-    observations = [replace(vehicle, zones=[DESTINATIONS[0]] if inside else [])
-                    for inside in sequence]
+    observations = [replace(vehicle, zones=[DESTINATIONS[0]] if inside else [],
+                            gps_timestamp=datetime(2026, 9, 17, 12, 30) + timedelta(seconds=index))
+                    for index, inside in enumerate(sequence)]
     client, notifier, sleep = Mock(), Mock(), Mock()
     client.get_vehicles.side_effect = [[observation] for observation in observations]
     assert cli.watch(client, ' amb-20 ', DESTINATIONS[0], 30, notifier, sleep) == 0
@@ -82,13 +84,13 @@ def test_monitoring_by_mobile_keeps_transition_and_original_event(plate, sequenc
     assert sleep.call_count == len(sequence) - 1
 
 
-def test_ambiguous_cli_stops_before_creating_monitor(monkeypatch, capsys):
+def test_ambiguous_cli_stops_before_creating_monitor(monkeypatch, caplog):
     client, notifier, monitor = Mock(), Mock(), Mock()
     client.get_vehicles.return_value = [Vehicle('1', 'DEU942', mobile_number='AMB-20'),
                                       Vehicle('2', 'OTHER', mobile_number='AMB-20')]
-    monkeypatch.setattr(cli, 'ArrivalMonitor', monitor)
+    monkeypatch.setattr('gps_emi.monitoring.runner.ArrivalMonitor', monitor)
     assert cli.watch(client, 'AMB-20', DESTINATIONS[0], 30, notifier, Mock()) == 1
-    assert 'identificador es ambiguo' in capsys.readouterr().out
+    assert 'identificador es ambiguo' in caplog.text
     monitor.assert_not_called()
     notifier.send_arrival.assert_not_called()
 
@@ -101,7 +103,7 @@ def test_cli_argument_compatibility(monkeypatch, flag):
     assert watch.call_args.args[1] == 'AMB-20'
 
 
-def test_prompt_and_notification_for_mobile_without_plate(monkeypatch, capsys):
+def test_prompt_and_notification_for_mobile_without_plate(monkeypatch, caplog):
     from gps_emi.models import ArrivalEvent
 
     prompts = []
@@ -113,7 +115,7 @@ def test_prompt_and_notification_for_mobile_without_plate(monkeypatch, capsys):
     assert cli.main(['--destination', DESTINATIONS[0]]) == 0
     assert prompts == ['Placa o número de móvil: ']
     ConsoleNotifier().send_arrival(ArrivalEvent(Vehicle('1', '', mobile_number='AMB-20'), DESTINATIONS[0]))
-    assert 'AMB-20 llegó a' in capsys.readouterr().out
+    assert 'AMB-20 llegó a' in caplog.text
 
 
 def test_observed_mobile_and_plate_resolve_same_vehicle(monkeypatch, observed_amb20_payload):
@@ -126,10 +128,11 @@ def test_observed_mobile_and_plate_resolve_same_vehicle(monkeypatch, observed_am
 
 
 @pytest.mark.parametrize('identifier', [' amb-20 ', ' pju886 '])
-def test_observed_vehicle_monitor_and_notification(identifier, observed_amb20_payload, capsys):
+def test_observed_vehicle_monitor_and_notification(identifier, observed_amb20_payload, caplog):
     vehicle = normalize_vehicle(parse(observed_amb20_payload)[0])
-    # Zones se simula exclusivamente para probar la transición; no es dato observado.
-    inside = replace(vehicle, zones=[DESTINATIONS[0]])
+    # Zones y timestamps se simulan para la transición; no son datos observados.
+    vehicle = replace(vehicle, gps_timestamp=datetime(2026, 9, 17, 12, 30))
+    inside = replace(vehicle, zones=[DESTINATIONS[0]], gps_timestamp=datetime(2026, 9, 17, 12, 31))
     client, notifier = Mock(), Mock()
     client.get_vehicles.side_effect = [[vehicle], [inside]]
     assert cli.watch(client, identifier, DESTINATIONS[0], 30, notifier, Mock()) == 0
@@ -139,4 +142,4 @@ def test_observed_vehicle_monitor_and_notification(identifier, observed_amb20_pa
     assert event.vehicle.plate == 'PJU886'
     assert event.vehicle.mobile_number == 'AMB-20'
     ConsoleNotifier().send_arrival(event)
-    assert 'PJU886 llegó a' in capsys.readouterr().out
+    assert 'PJU886 llegó a' in caplog.text
