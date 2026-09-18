@@ -9,7 +9,7 @@ from gps_emi.errors import AcquisitionError, TransientAcquisitionError
 from gps_emi.models import Vehicle
 from gps_emi.monitoring.arrival import ArrivalMonitor, DESTINATIONS
 from gps_emi.monitoring.observation import (
-    ObservationValidator, ObservationStatus, observe_resolved_vehicle,
+    ObservationValidator, ObservationStatus, observe_resolved_vehicle, gps_fix_warning,
 )
 from gps_emi.notifications.base import NotificationService
 from gps_emi.resolution import (
@@ -30,12 +30,12 @@ def local_now():
 
 
 class WatchRunner:
-    def __init__(self, client: VehicleSource, identifier: str, destination: str,
+    def __init__(self, client: VehicleSource, identifier: str, destination: str | None,
                  notifier: NotificationService, config: WatchConfig | None = None,
                  *, sleep=None, now=None):
         if not identifier.strip():
             raise ValueError("Introduzca una placa o número de móvil.")
-        if destination not in DESTINATIONS:
+        if destination is not None and destination not in DESTINATIONS:
             raise ValueError("Destino no permitido.")
         self.client = client
         self.identifier = identifier.strip()
@@ -80,11 +80,11 @@ class WatchRunner:
             self._diagnostic_timestamp = timestamp
             self._diagnostics.clear()
         age = assessment.report_age
-        if age is not None and age > self.config.stale_warning_seconds:
+        if assessment.is_stale(self.config.stale_warning_seconds):
             self._warn_once("STALE", "STALE: última posición reportada hace %.0f s (GPS=%s).", age, timestamp)
         if age is not None and age < 0:
             self._warn_once("FUTURE", "Fecha GPS posterior al reloj de consulta; revise los relojes (GPS=%s).", timestamp)
-        if vehicle.gps_fix in (0, False, "0"):
+        if gps_fix_warning(vehicle.gps_fix):
             self._warn_once("GPSFix", "GPSFix=0: dato diagnóstico; no se descarta la observación.")
         if assessment.status == ObservationStatus.DUPLICATE:
             logger.debug("DUPLICATE: sin reporte GPS nuevo para VEHID=%s.", self.vehid)
@@ -96,19 +96,22 @@ class WatchRunner:
             return False
         event = observe_resolved_vehicle(self.monitor, vehicle, expected_vehid=self.vehid)
         self.validator.last_processed_gps_timestamp = timestamp
-        membership = "INSIDE" if self.destination in vehicle.zones else "OUTSIDE"
+        if self.destination is None:
+            membership = "INSIDE_EMI" if self.monitor.actual_sites else "OUTSIDE_EMI"
+        else:
+            membership = "INSIDE" if self.destination in vehicle.zones else "OUTSIDE"
         logger.info("%s | última posición reportada: %s | report_age=%.0f s | GPSFix=%s",
                     membership, timestamp, age, vehicle.gps_fix)
         if event is None:
             return False
         logger.info("ARRIVAL_DETECTED: VEHID=%s, placa=%s, móvil=%s, destino=%s.",
-                    vehicle.vehid, vehicle.plate, vehicle.mobile_number, self.destination)
+                    vehicle.vehid, vehicle.plate, vehicle.mobile_number, event.destination)
         self.notifier.send_arrival(event)
         logger.info("Vigilancia completada.")
         return True
 
     def _run(self):
-        logger.info("Vigilando %s → %s", self.identifier, self.destination)
+        logger.info("Vigilando %s → %s", self.identifier, self.destination or "EMI (Poblado o Taller)")
         while True:
             try:
                 vehicles = self.client.get_vehicles()
@@ -160,3 +163,11 @@ class WatchRunner:
             logger.error("Error no recuperable durante la vigilancia; operación detenida.")
             self._result = 1
         return self._result
+
+
+def watch_arrival(client: VehicleSource, identifier: str, notifier: NotificationService,
+                  config: WatchConfig | None = None, *, destination: str | None = None,
+                  sleep=None, now=None) -> int:
+    """Caso de uso de vigilancia a EMI; destination es compatibilidad explícita I2."""
+    return WatchRunner(client, identifier, destination, notifier, config,
+                       sleep=sleep, now=now).run()

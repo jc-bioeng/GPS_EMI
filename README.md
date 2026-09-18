@@ -1,13 +1,16 @@
-# GPS EMI — I1 e I2
+# GPS EMI — I1, I2 e I3
 
-Monitor de consola para **una ambulancia**, seleccionada por **placa o número de móvil**,
-de Ambulancias Medellín y **un destino**.
+Consola para vigilar la llegada a EMI de **una ambulancia**, consultar su última
+ubicación por **placa o número de móvil**, o listar ambulancias por sede.
 Utiliza la pertenencia a geocercas reportada por WideTech en `Zones`: no calcula
 distancias, no utiliza coordenadas para decidir llegadas y no garantiza posición actual.
 
 I1 está implementado y validado manualmente contra GPSpace. I2 añade robustez de
 ejecución continua: reintentos con backoff, continuidad por VEHID, validación de
 timestamps y logging. Los errores de adquisición nunca son observaciones del móvil.
+I3 añade el menú operacional, consultas puntuales y vigilancia de EMI como unión
+de Poblado y Taller. Las consultas conservan la última información reportada;
+no garantizan ubicación física actual.
 
 Destinos admitidos, por nombre exacto:
 
@@ -19,6 +22,13 @@ Destinos admitidos, por nombre exacto:
 ## Arquitectura
 
 `WideTechClient → Vehicle → WatchRunner → ObservationValidator → ArrivalMonitor → ArrivalEvent → NotificationService → ConsoleNotifier`
+
+La CLI coordina entrada/salida y llama a `watch_arrival`, `get_vehicle_location`
+o `list_vehicles_at_site`. Las dos consultas usan `WideTechClient`, el resolver
+existente y `ObservationValidator`, y devuelven `LocationResult` o `SiteResult`.
+`formatting.py` convierte esos resultados en texto sin HTTP ni reglas de selección.
+`sites.py` centraliza los dos nombres exactos. Los casos de uso no necesitan
+`input()` ni `print()` y pueden reutilizarse desde otro canal.
 
 El adaptador concentra autenticación, petición, parser y normalización. Devuelve
 exclusivamente registros cuyo `fltName` sea `Ambulancias Medellin;44986;0`.
@@ -37,6 +47,9 @@ src/gps_emi/
     config.py
     errors.py
     resolution.py
+    sites.py
+    queries.py
+    formatting.py
     cli.py
     providers/
         __init__.py
@@ -60,6 +73,10 @@ tests/
     test_config.py
     test_observation.py
     test_runner.py
+    test_emi_arrival.py
+    test_queries.py
+    test_formatting.py
+    test_menu.py
     fixtures/
         emi_amb20.json
 gpspace_loaddatalog.py
@@ -102,18 +119,41 @@ Modo interactivo:
 .\.venv\Scripts\python.exe gpspace_loaddatalog.py
 ```
 
-La consola solicita `Placa o número de móvil:`. Con argumentos (sustituir el
-identificador de ejemplo por una placa o número de móvil real de la flota):
+Sin argumentos se muestra:
+
+```text
+1. Vigilar llegada a EMI
+2. Consultar ubicación de ambulancia
+3. Ver ambulancias en sede
+0. Salir
+```
+
+Las opciones 1 y 2 solicitan `Placa o número de móvil:`. Solo la opción 3 solicita
+sede (1: Poblado, 2: Taller). Una selección inválida permite reintentar. Al completar
+una operación correctamente se vuelve al menú. Salir con 0 no carga configuración
+de autenticación ni consulta GPSpace. Ctrl+C termina con código 130.
+
+Con argumentos se ejecuta una sola operación y se termina:
 
 ```powershell
-.\.venv\Scripts\python.exe gpspace_loaddatalog.py --identifier AMB-20 --destination "EMI_Medellin_Taller" --interval 30
-.\.venv\Scripts\python.exe gpspace_loaddatalog.py --identifier DEU942 --destination "EMI Medellin_Poblado" --interval 30
+.\.venv\Scripts\python.exe gpspace_loaddatalog.py --identifier AMB-20 --interval 30
+.\.venv\Scripts\python.exe gpspace_loaddatalog.py --action location --identifier AMB-20
+.\.venv\Scripts\python.exe gpspace_loaddatalog.py --action location --identifier PJU886
+.\.venv\Scripts\python.exe gpspace_loaddatalog.py --action site --site "EMI Medellin_Poblado"
+.\.venv\Scripts\python.exe gpspace_loaddatalog.py --action site --site "EMI_Medellin_Taller"
 ```
 
 Después de instalar el paquete también se puede ejecutar `gps-emi` o
 `python -m gps_emi.cli` con los mismos argumentos. El script original ahora es una
-entrada al monitor: ya no imprime el listado completo de vehículos y coordenadas.
+entrada a la consola: no imprime coordenadas ni el listado completo de la flota.
 `--plate` permanece como alias de `--identifier` para compatibilidad con I1.
+`--identifier` sin `--action` inicia vigilancia de la unión EMI sin pedir sede.
+`--action watch` permite indicar esa operación explícitamente.
+`--destination` se conserva temporalmente como opción **obsoleta**, con WARNING:
+si se proporciona, mantiene la vigilancia de una sola sede de I1/I2. Es una excepción
+de compatibilidad al nuevo comportamiento agregado; el menú nunca solicita destino.
+Los argumentos de polling, backoff y logging siguen disponibles. Las consultas
+puntuales solo utilizan el umbral STALE; no hacen polling ni reintentos automáticos.
 
 Configuración de I2 (segundos, sin nuevas dependencias):
 
@@ -131,7 +171,7 @@ Niveles admitidos: DEBUG, INFO, WARNING y ERROR. INFO muestra inicio, estados nu
 recuperación y llegada; un nivel superior oculta esos mensajes informativos.
 
 ```powershell
-.\.venv\Scripts\python.exe gpspace_loaddatalog.py --identifier AMB-20 --destination "EMI Medellin_Poblado" --interval 30 --initial-backoff 5 --max-backoff 30 --stale-warning-seconds 300 --log-level INFO
+.\.venv\Scripts\python.exe gpspace_loaddatalog.py --identifier AMB-20 --interval 30 --initial-backoff 5 --max-backoff 30 --stale-warning-seconds 300 --log-level INFO
 ```
 
 El modelo conserva los identificadores por separado con la correspondencia
@@ -164,18 +204,71 @@ No se cambia a otro VEHID que reutilice el identificador inicial. Un VEHID ausen
 al inicio o duplicado en una respuesta impide seleccionar una identidad segura y
 termina la vigilancia con error.
 
-`ArrivalMonitor` no cambia. La adaptación de `observation.py` comprueba el VEHID y
+La adaptación de `observation.py` comprueba el VEHID y
 presenta la clave inicial a su interfaz heredada. La copia de entrada es privada;
 el modelo resuelto y el evento conservan la placa y el número de móvil recibidos
 en esa consulta. La consola usa el número si no hay placa disponible.
 
-La primera lectura establece `OUTSIDE` o `INSIDE` y no produce evento. Solo una
-transición observada `OUTSIDE → INSIDE` produce `ARRIVAL_DETECTED`. El notificador
-muestra la llegada y la CLI termina. El monitor no vuelve a emitir eventos.
+En I3, EMI significa `EMI Medellin_Poblado OR EMI_Medellin_Taller`. La primera
+lectura establece `OUTSIDE_EMI` o `INSIDE_EMI` y no produce evento. Solo una transición
+observada `OUTSIDE_EMI → INSIDE_EMI` produce `ARRIVAL_DETECTED`. Taller → Poblado
+y Poblado → Taller sin observación exterior intermedia permanecen dentro de EMI:
+no son nuevas llegadas. Salir de ambas y volver a cualquiera produce una llegada.
+El notificador muestra la sede detectada y la vigilancia finaliza. El monitor
+no vuelve a emitir eventos. El modo histórico con destino explícito mantiene
+los estados `OUTSIDE`/`INSIDE` y sus reglas anteriores.
+
+`ArrivalEvent` conserva `vehicle`, `destination` y `event_type`, y añade `sites`
+(tupla de sedes exactas detectadas) y la propiedad `site` para una sola sede.
+Normalmente `destination` y `site` contienen el nombre exacto de la sede de llegada.
+Si un reporte contiene ambas sedes, se conservan ambas en orden Poblado/Taller,
+`destination` muestra ambas y `site` es `None`: no se inventa una sede física única.
 La placa o número de móvil se compara sin distinguir mayúsculas y quitando espacios exteriores;
 no se eliminan guiones. Las geocercas se comparan exactamente.
 
+## Consultar ubicación y ambulancias en sede
+
+Cada operación realiza **una adquisición LoadDataLog**, sin monitor, bucle, espera
+ni reintento automático. El cliente conserva el filtro exacto de Ambulancias Medellín.
+La consulta individual reutiliza `find_vehicle`: AMB-20 y PJU886 resuelven el mismo
+vehículo del fixture observado. Un identificador inexistente o ambiguo da un error
+claro; en el menú permite volver a elegir. Los errores de adquisición se comunican
+sin detalles sensibles y terminan con código 1; un fallo transitorio invita a consultar
+de nuevo, sin simular recuperación automática.
+
+`LocationResult` contiene `vehicle`, `queried_at`, `assessment`, `stale`, y expone
+`report_age` numérico y `movement`. La salida muestra número de móvil, placa,
+Location original, hora GPS, antigüedad, velocidad numérica y humana, ignición y GPSFix.
+Location no se sustituye por el nombre de una sede, incluso cuando Zones contiene EMI.
+No se muestran campos de latitud/longitud.
+
+- Velocidad 0: **Detenida**; mayor que 0: **En movimiento**. No se asume cero
+  si falta. Valores negativos no reciben una categoría de movimiento inventada.
+- Ignición 0/1: **Apagada/Encendida**; otros valores: **N/D**.
+- Antigüedad: `43 s → hace 43 s`, `125 s → hace 2 min`, `786 s → hace 13 min`,
+  `7200 s → hace 2 h`. Se conserva el valor numérico sin redondear para decisiones.
+- STALE reutiliza exactamente `report_age > stale_warning_seconds` de I2 (300 s
+  por defecto). No oculta Location ni descarta vehículos. GPSFix=0 se conserva
+  con advertencia diagnóstica, sin invalidar automáticamente la posición.
+- Datos faltantes: **N/D**. Si falta el timestamp o no es comparable, la antigüedad
+  y el estado de frescura quedan desconocidos (`stale=None`). Una fecha futura
+  muestra una advertencia de reloj, sin cambiar la política temporal de I2.
+
+`SiteResult` contiene `site`, `queried_at` y una tupla `entries` de `LocationResult`.
+Una única adquisición construye toda la lista, sin peticiones por ambulancia.
+La pertenencia exige que `Zones` contenga el nombre exacto elegido; `ZONA 2 - POBLADO`
+por sí sola no basta. La tabla muestra móvil, placa, velocidad/movimiento, antigüedad
+y GPSFix. Su significado es **ambulancias cuya última posición reportada pertenece
+a esta geocerca**, no presencia física actual garantizada.
+
+Orden: reportes no STALE primero, del más reciente al más antiguo; después STALE
+en el mismo orden; timestamps ausentes/no comparables al final. Los empates se
+resuelven por número de móvil, placa (sin distinguir mayúsculas) y VEHID.
+Los STALE permanecen visibles y etiquetados. Una lista vacía se informa explícitamente.
+
 ## Polling, backoff y recuperación
+
+Esta sección corresponde exclusivamente a la vigilancia continua.
 
 El polling normal espera 30 segundos **después** de consultar y procesar una respuesta;
 el tiempo HTTP se suma al ciclo. También se espera el intervalo normal cuando el
@@ -211,8 +304,9 @@ Una respuesta vacía o un formato desconocido no se diagnostican como sesión ex
 con certeza. No hay login automático, renovación de cookie ni navegador automatizado.
 Un 403 también puede indicar falta de permisos; requiere intervención manual.
 
-Un error fatal termina con código 1. Una llegada notifica una sola vez y termina
-con código 0. Si falla la notificación, se termina sin reintentar para evitar un envío
+Un error fatal termina con código 1. Una llegada notifica una sola vez y completa
+la operación con código 0 (en modo interactivo vuelve al menú). Si falla la notificación,
+se termina sin reintentar para evitar un envío
 duplicado. Ctrl+C durante la consulta, el polling o el backoff muestra
 `Vigilancia cancelada.` (INFO) y termina sin traceback, código 130. Una nueva ejecución
 comienza una vigilancia nueva, sin persistencia.
@@ -281,6 +375,10 @@ coincidencia exacta, ausencia de duplicados, parser con Sensors anidados, HTML,
 comillas, new Date, filtrado de flota, contrato HTTP, errores seguros y CLI. I2 añade
 secuencias de recuperación, backoff, orden temporal, duplicados, calidad diagnóstica,
 continuidad por VEHID, cancelación y ausencia de detalles sensibles en los logs.
+I3 añade las transiciones de la unión EMI y entre sedes, sede del evento, recuperación
+en modo agregado, consultas por ambos identificadores, una sola adquisición por
+operación, umbral STALE compartido, orden y permanencia de STALE, datos incompletos,
+formato humano, menú y compatibilidad CLI.
 
 ## Endpoint observado y límites
 
@@ -307,7 +405,7 @@ crecientes puede producir llegada: I2 advierte su antigüedad, no garantiza posi
 actual. No se detectan entradas y salidas completas entre dos reportes adquiridos.
 No hay persistencia ni múltiples vigilancias. Si cambia el VEHID asignado a una
 ambulancia, no se adopta automáticamente la nueva identidad. La validación de I2
-usa HTTP simulado; la prueba manual real corresponde al usuario con su sesión local.
+usa HTTP simulado, al igual que I3; la prueba manual real corresponde al usuario con su sesión local.
 
 La principal deuda sigue siendo la autenticación: la sesión/cookie se obtiene
 externamente. Si expira, la vigilancia debe terminar para que el usuario la renueve
@@ -316,6 +414,6 @@ de reloj/zona horaria requieren validación adicional con evidencia del proveedo
 
 ## Pendiente
 
-I3: consulta UBICACION por placa o número. I4: WhatsApp. I5: despliegue VPS Ubuntu.
+I4: WhatsApp. I5: despliegue VPS Ubuntu.
 No están implementados. Tampoco se incluye renovación automática de autenticación,
 persistencia, API, interfaz web, contenedores ni geocercas propias.

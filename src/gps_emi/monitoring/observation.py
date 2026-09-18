@@ -20,6 +20,13 @@ class ObservationAssessment:
     status: ObservationStatus
     report_age: float | None = None
 
+    def is_stale(self, threshold: float) -> bool:
+        return self.report_age is not None and self.report_age > threshold
+
+
+def gps_fix_warning(value) -> bool:
+    return value in (0, False, "0")
+
 
 class ObservationValidator:
     def __init__(self):

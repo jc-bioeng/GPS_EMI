@@ -56,19 +56,20 @@ def test_invalid_interval(interval):
 
 
 def test_interactive_selection(monkeypatch):
-    answers = iter([' amb-106 ', '2'])
+    answers = iter(['1', ' amb-106 ', '0'])
     monkeypatch.setattr('builtins.input', lambda prompt: next(answers))
     watch = Mock(return_value=0)
     monkeypatch.setattr(cli, 'watch', watch)
     assert cli.main([]) == 0
-    assert watch.call_args.args[1:4] == ('AMB-106', DESTINATIONS[1], 30.0)
+    assert watch.call_args.args[1:4] == ('AMB-106', None, 30.0)
 
 
-@pytest.mark.parametrize('answers', [[''], ['AMB-106', '3']])
-def test_invalid_interactive_input(monkeypatch, answers):
+@pytest.mark.parametrize('answers', [['incorrecto', '0'], ['1', '', '0']])
+def test_invalid_interactive_input(monkeypatch, answers, capsys):
     iterator = iter(answers)
     monkeypatch.setattr('builtins.input', lambda prompt: next(iterator))
-    assert cli.main([]) == 1
+    assert cli.main([]) == 0
+    assert 'ERROR:' in capsys.readouterr().out
 
 
 @pytest.mark.parametrize('error,code', [(KeyboardInterrupt(), 130), (EOFError(), 130), (WideTechError('Sesión no disponible.'), 1)])

@@ -28,3 +28,13 @@ class ArrivalEvent:
     vehicle: Vehicle
     destination: str
     event_type: str = field(default="ARRIVAL_DETECTED", init=False)
+    sites: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        if not self.sites:
+            object.__setattr__(self, "sites", (self.destination,))
+
+    @property
+    def site(self) -> str | None:
+        """Sede única; si se reportan ambas, no se elige arbitrariamente."""
+        return self.sites[0] if len(self.sites) == 1 else None
