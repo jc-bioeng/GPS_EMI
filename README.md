@@ -102,6 +102,10 @@ Las dependencias de ejecución son `requests`, `python-dotenv`, `Flask` y `waitr
 Variables, sin valores de credenciales:
 
 - `GPSPACE_COOKIE`: requerida, desde el entorno del proceso o `.env` local.
+- `GPSPACE_SESSION_INFO`: JSON obligatorio con `UID` y `UNAME` de la sesión
+  actual. Conserva el tipo JSON de UID (texto o entero); UNAME es texto.
+- `GPSPACE_LOADDATALOG_STATE`: JSON obligatorio con los siete campos de estado
+  indicados abajo, conservando sus valores y tipos observados. No tiene defaults.
 - `GPSPACE_CONTENT_TYPE`: opcional; conserva la opción del prototipo para ajustar
   el Content-Type si cambia el comportamiento del endpoint.
 
@@ -384,12 +388,92 @@ formato humano, menú y compatibilidad CLI.
 
 GPSpace/WideTech utiliza un endpoint **interno/no documentado**:
 `https://gpspace.app/EMI/ajax/Widetech.WEB.OnLine,Widetech.ashx`, con
-`_method=LoadDataLog` y `_session=rw`. Se conservan el POST, los headers y el cuerpo
-`Parameters` funcionales del prototipo. El valor opaco de `Parameters` permanece
-dentro del adaptador por compatibilidad; no constituye un contrato oficial ni
-reemplaza la autenticación. Cambios del proveedor pueden invalidarlo.
+`_method=LoadDataLog` y `_session=rw`. Se conservan el POST y los headers.
+`Parameters` ahora se genera en cada consulta: sesión/estado explícitos → dict
+en el orden observado → JSON compacto UTF-8 → XOR y rotación circular de tres
+bits → Base64 URL-safe sin padding → cuerpo `Parameters=<generado>`.
+UID alimenta `strUserID`; UNAME se utiliza solo como clave de ofuscación
+(si es explícitamente vacío, se usa `wtApi`, como en el JavaScript suministrado).
+No queda fallback al valor opaco anterior. Esto reproduce el código observado,
+no constituye un contrato oficial ni reemplaza la autenticación.
+Cambios del proveedor pueden invalidarlo.
 El timeout es de 60 segundos y las redirecciones se rechazan para evitar continuar
 una consulta autenticada hacia otro destino.
+
+Los campos `intLastUpdate`, `intTimer`, `strMobiles`, `intConsoleType`, `idFleet`,
+`intFrom` y `strOriginQuery` no tenían valores independientes recuperables en el
+código anterior. Deben configurarse explícitamente a partir del cliente oficial;
+no se infiere su semántica ni se presupone que `idFleet` sea `44986`.
+`bolAddDriver` es siempre `true`, según el código suministrado. El filtro posterior
+sigue siendo exactamente `fltName == "Ambulancias Medellin;44986;0"`.
+El estado configurado se reutiliza sin avanzar cursores ni deducir incrementales.
+Debe validarse manualmente que corresponde a una consulta con todos los vehículos
+necesarios. Se preservan texto, enteros seguros de JavaScript, booleanos y null;
+se rechazan fracciones, objetos y listas hasta disponer de evidencia para ellos.
+La configuración inválida falla antes del POST con un error no recuperable y sin
+mostrar sus valores. Importar o construir el cliente no lee esa configuración.
+
+### Prueba manual de Parameters dinámico
+
+Aceptación manual reportada el **19/09/2026** contra GPSpace/WideTech real con
+una sesión autenticada: generación dinámica de `Parameters` validada mediante
+`--action location --identifier AMB-20` y los inventarios de
+`EMI_Medellin_Taller` y `"EMI Medellin_Poblado"`. Se conservaron móvil/placa,
+ubicación, timestamp GPS, antigüedad/STALE y GPSFix; la consulta individual mostró
+velocidad/movimiento e ignición correctos y los inventarios conservaron el orden
+temporal. Deben usarse los nombres exactos de geocerca y comillas si contienen
+espacios. Esta aceptación no valida autenticación automática.
+
+La cookie y la autenticación siguen siendo externas/manuales. No hay login
+automático, renovación automática de sesión ni bypass de Turnstile. Una API o
+autenticación soportada por WideTech sigue siendo la solución futura preferida.
+Pasar pytest por sí solo no valida la sesión ni la integración real.
+
+1. Iniciar sesión normalmente en GPSpace. En DevTools → Sources, localizar la
+   llamada `wtApi.ObfuscateString(JSON.stringify(Parameters), ...)` y colocar un
+   breakpoint después de construir `Parameters`, antes de ofuscarlo. Esperar una
+   consulta normal de la página y seleccionar ese frame cuando se detenga.
+2. Desde la consola de ese frame copiar únicamente la configuración necesaria
+   al portapapeles, sin imprimirla. Primero ejecutar:
+
+   ```javascript
+   copy(JSON.stringify({UID: wtApi.SesInfo.UID, UNAME: wtApi.SesInfo.UNAME}))
+   ```
+
+   En la misma ventana PowerShell que se usará para la prueba, ejecutar:
+
+   ```powershell
+   $env:GPSPACE_SESSION_INFO = Get-Clipboard -Raw
+   ```
+
+   Después, volver al frame detenido en DevTools y ejecutar:
+
+   ```javascript
+   copy(JSON.stringify({intLastUpdate: Parameters.intLastUpdate, intTimer: Parameters.intTimer, strMobiles: Parameters.strMobiles, intConsoleType: Parameters.intConsoleType, idFleet: Parameters.idFleet, intFrom: Parameters.intFrom, strOriginQuery: Parameters.strOriginQuery}))
+   ```
+
+   En PowerShell, ejecutar y después reanudar la página:
+
+   ```powershell
+   $env:GPSPACE_LOADDATALOG_STATE = Get-Clipboard -Raw
+   Set-Clipboard -Value ''
+   ```
+
+   Estos snippets solo copian datos existentes: no realizan consultas adicionales.
+3. Conservar `GPSPACE_COOKIE` vigente en la configuración local por el procedimiento
+   manual existente. Las dos variables anteriores duran esa sesión PowerShell,
+   prevalecen sobre `.env` y evitan transformar el JSON mediante interpolación de
+   dotenv. No compartir estos valores ni incorporarlos al repositorio.
+4. Desde PowerShell, en `C:\GPS_EMI`, ejecutar una consulta de ubicación:
+
+   ```powershell
+   .\.venv\Scripts\python.exe gpspace_loaddatalog.py --action location --identifier AMB-20
+   ```
+
+   Comprobar la identificación y la posición reportada, incluyendo fecha GPS y
+   STALE. Esta operación realiza una adquisición; no inicia vigilancia continua.
+   Un error de configuración exige revisar los JSON; un error de sesión exige
+   renovar manualmente la cookie y los datos de sesión. No hacer dumps de requests.
 
 El parser extrae campos sin ejecutar JavaScript. Conserva el formato observado
 `new Date(año, mes desde cero, día, hora, minuto, segundo)` y conserva por separado

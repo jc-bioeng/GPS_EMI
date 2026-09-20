@@ -5,6 +5,7 @@ import pytest
 import requests
 
 from gps_emi.providers import widetech as wt
+from gps_emi.providers.load_data_log import generate_parameters, WideTechSessionInfo, LoadDataLogState
 
 SAMPLE = r"""{'Rows': [
 {'Sensors': [{'GPSFix': 99, 'Location': 'nested } ], {', 'Zones': 'wrong'}],
@@ -73,7 +74,8 @@ def test_http_contract_and_fleet_filter(monkeypatch):
     def post(url, **kwargs):
         assert url == wt.URL
         assert kwargs['params'] == {'_method': 'LoadDataLog', '_session': 'rw'}
-        assert kwargs['data'] == ('Parameters=' + wt.PARAMETERS).encode('utf-8')
+        generated = generate_parameters(WideTechSessionInfo.from_env(), LoadDataLogState.from_env())
+        assert kwargs['data'] == ('Parameters=' + generated).encode('utf-8')
         assert bool(kwargs['headers']['Cookie'])
         assert kwargs['headers']['Content-Type'] == 'text/plain;charset=UTF-8'
         assert kwargs['timeout'] == 60

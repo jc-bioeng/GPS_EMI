@@ -9,6 +9,7 @@ from datetime import datetime
 import requests
 
 from gps_emi.models import Vehicle, normalize_plate
+from gps_emi.providers.load_data_log import WideTechSessionInfo, LoadDataLogState, generate_parameters
 from gps_emi.errors import (
     AcquisitionError, TransientAcquisitionError, SessionExpiredError,
     MissingCredentialsError, InvalidResponseError, HTTPAcquisitionError,
@@ -16,7 +17,6 @@ from gps_emi.errors import (
 )
 
 URL = "https://gpspace.app/EMI/ajax/Widetech.WEB.OnLine,Widetech.ashx"
-PARAMETERS = "REMOVED_HISTORICAL_SESSION_MATERIAL"
 TARGET_FLEET = "Ambulancias Medellin;44986;0"
 
 FIELDS = (
@@ -35,14 +35,21 @@ TRANSIENT_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 class WideTechClient:
     """Adaptador del endpoint interno observado, sin contrato oficial.
 
-    Parameters y formato HTTP se conservan del prototipo validado.
+    Parameters se genera desde sesión/estado explícitos; formato HTTP conservado.
     get_vehicles devuelve exclusivamente Ambulancias Medellín.
     """
+
+    def __init__(self, *, session_info=None, query_state=None):
+        self.session_info = session_info
+        self.query_state = query_state
 
     def load_data_log(self):
         cookie = os.getenv("GPSPACE_COOKIE", "").strip()
         if not cookie:
             raise MissingCredentialsError()
+        session = self.session_info if self.session_info is not None else WideTechSessionInfo.from_env()
+        state = self.query_state if self.query_state is not None else LoadDataLogState.from_env()
+        parameters = generate_parameters(session, state)
         headers = {
             "Accept": "*/*",
             "Content-Type": os.getenv("GPSPACE_CONTENT_TYPE", "text/plain;charset=UTF-8"),
@@ -54,7 +61,7 @@ class WideTechClient:
         try:
             response = requests.post(
                 URL, params={"_method": "LoadDataLog", "_session": "rw"},
-                headers=headers, data=("Parameters=" + PARAMETERS).encode("utf-8"),
+                headers=headers, data=("Parameters=" + parameters).encode("utf-8"),
                 timeout=60, allow_redirects=False,
             )
             with response:
