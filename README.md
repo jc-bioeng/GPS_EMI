@@ -1,4 +1,4 @@
-# GPS EMI — I1, I2 e I3
+# GPS EMI — I1, I2, I3 y piloto WhatsApp I4-P
 
 Consola para vigilar la llegada a EMI de **una ambulancia**, consultar su última
 ubicación por **placa o número de móvil**, o listar ambulancias por sede.
@@ -96,7 +96,7 @@ python -m venv .venv
 ```
 
 En Ubuntu se utiliza `.venv/bin/python` en lugar del ejecutable de Windows.
-Las dependencias de ejecución son `requests` y `python-dotenv`; las pruebas usan
+Las dependencias de ejecución son `requests`, `python-dotenv`, `Flask` y `waitress`; las pruebas usan
 `pytest`. No hay rutas específicas de Windows en el núcleo.
 
 Variables, sin valores de credenciales:
@@ -412,8 +412,338 @@ externamente. Si expira, la vigilancia debe terminar para que el usuario la renu
 por fuera del programa. Los cambios de formato del endpoint interno y las diferencias
 de reloj/zona horaria requieren validación adicional con evidencia del proveedor.
 
+## Piloto I4-P — WhatsApp Cloud API
+
+El emisor es **el número de prueba de Meta**. El celular institucional de Biomédica
+es el destinatario de prueba y usuario autorizado. **No registrar ni migrar ese
+celular institucional como emisor.** I4-P es un piloto local, no el I4 definitivo.
+
+Se conservan los valores recibidos: `MOVIL- 96` no se convierte en `AMB-96`.
+El mapping de identificadores sigue siendo el empíricamente observado para EMI,
+no una garantía universal de WideTech.
+
+### Arquitectura y ejecución
+
+```text
+Meta → Flask /webhook → firma + extracción + Inbox/deduplicación → HTTP 200
+                                            │
+                                  worker secuencial de mensajes
+                                            │
+                         autorización → Conversation/parser
+                                            │
+                    ┌───────────────────────┼────────────────────┐
+             get_vehicle_location   list_vehicles_at_site   WatchManager
+                    │                       │                    │
+                LocationResult          SiteResult         hilo único
+                    │                       │                    │
+                    └────── formatters ─────┘                WatchRunner
+                                  │                          ArrivalEvent
+                              Messenger                          │
+                                  │                       WhatsAppNotifier
+                                  └──────── WhatsAppClient ──────┘
+                                            │
+                                      Meta Graph API
+```
+
+Flask aporta únicamente las dos rutas y un cliente de pruebas sin sockets.
+Waitress sirve WSGI en Windows con un proceso, sin debugger ni reloader; no se usa
+el servidor de desarrollo de Flask para el túnel. Ver la
+[guía oficial Flask/Waitress](https://flask.palletsprojects.com/en/stable/deploying/waitress/).
+
+Los módulos están en `src/gps_emi/whatsapp/`: `config.py`, `client.py`, `delivery.py`,
+`webhook.py`, `worker.py`, `routing.py`, `service.py`, `formatting.py`, `notifier.py`
+y `server.py`. Los tests están en `tests/whatsapp/`.
+
+Ubicación y sede llaman a los casos de uso I3 originales, con una adquisición por
+operación. No se duplican geocercas, resolución, clasificación de velocidad, orden
+fresh/STALE ni antigüedad. `WatchManager` reutiliza directamente `WatchRunner` de I2/I3.
+El runner incorpora opciones neutrales al canal: `on_resolved` para confirmar la
+identidad real, `stop_event` para detener esperas y `failure_code` para comunicar
+un error controlado. Su comportamiento por defecto y `ConsoleNotifier` se conservan.
+`ArrivalMonitor`, `Vehicle`, el parser WideTech y la CLI I3 permanecen intactos.
+
+El POST solo valida y encola: no espera HTTP de GPSpace/Meta ni polling. Un worker
+procesa consultas y respuestas en orden de recepción local. La vigilancia utiliza
+otro hilo y reserva atómicamente **un único puesto global por proceso**, incluyendo
+su resolución inicial. Otra solicitud recibe un aviso de vigilancia activa, sin
+revelar datos de la vigilancia existente. No ejecutar varias instancias del piloto
+ni una vigilancia CLI en paralelo: no existe coordinación entre procesos.
+
+Ctrl+C cierra la admisión, descarta solicitudes pendientes y señala cancelación
+del watch. Las esperas de polling/backoff son interrumpibles. Un HTTP ya iniciado
+no se puede cancelar: el cierre espera de forma acotada y los hilos son daemon.
+Al reiniciar se pierde todo estado y una vigilancia debe solicitarse otra vez.
+
+### Configuración local
+
+El comando del servidor carga `.env` del directorio actual con `override=False`,
+igual que la CLI. Importar módulos, construir la app y los tests no leen `.env`.
+`.env` continúa ignorado. Introducir los valores localmente sin compartirlos ni
+ponerlos en comandos, capturas, logs o Git.
+
+| Variable | Uso / predeterminado |
+| --- | --- |
+| `WHATSAPP_ACCESS_TOKEN` | Obligatoria; token de la app con permiso de mensajería |
+| `WHATSAPP_PHONE_NUMBER_ID` | Obligatoria; ID del **número de prueba emisor**, no el teléfono del usuario |
+| `WHATSAPP_VERIFY_TOKEN` | Obligatoria; secreto aleatorio elegido localmente y repetido en Meta |
+| `WHATSAPP_APP_SECRET` | Obligatoria; App Secret de la misma app Meta |
+| `WHATSAPP_ALLOWED_NUMBERS` | Obligatoria; números internacionales con país, separados por comas |
+| `WHATSAPP_API_VERSION` | `v25.0`, configurable en un solo lugar |
+| `WHATSAPP_ARRIVAL_MODE` | `template` por defecto; `text` para piloto dentro de ventana |
+| `WHATSAPP_ARRIVAL_TEMPLATE` | `ambulance_arrival_notification` |
+| `WHATSAPP_TEMPLATE_LANGUAGE` | `es`; debe coincidir con el idioma aprobado |
+| `GPSPACE_COOKIE` | Configuración local existente de I1–I3 |
+| `GPSPACE_CONTENT_TYPE` | Opción existente de I1–I3 |
+
+Los números se comparan tras retirar `+`, espacios, guiones y paréntesis; se exige
+código de país y no se adivina. La lista vacía impide arrancar. Identificadores
+distintos de números telefónicos (por ejemplo BSUID) no se convierten ni autorizan.
+Falta de token/App Secret/verify token o configuración inválida impide el arranque.
+
+Desde `C:\GPS_EMI`, instalar las dependencias y actualizar la entrada de consola:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -e .
+```
+
+Después de configurar localmente las variables, levantar el webhook:
+
+```powershell
+.\.venv\Scripts\python.exe -m gps_emi.whatsapp.server
+```
+
+Escucha en **127.0.0.1:8000**, ruta **/webhook**. También existe `gps-emi-whatsapp`
+tras reinstalar el paquete. Opciones disponibles:
+
+```powershell
+.\.venv\Scripts\python.exe -m gps_emi.whatsapp.server --host 127.0.0.1 --port 8000 --interval 30 --initial-backoff 5 --max-backoff 30 --stale-warning-seconds 300
+```
+
+### Seguridad, recepción y deduplicación
+
+GET exige `hub.mode=subscribe`, verify token correcto y `hub.challenge`, y devuelve
+el challenge como texto con HTTP 200. Token/modo incorrecto devuelve 403.
+
+POST exige `X-Hub-Signature-256`: `sha256=` seguido del HMAC-SHA256 hexadecimal
+de **los bytes originales del cuerpo**, con App Secret como clave. Se compara con
+`hmac.compare_digest` antes de interpretar JSON. No hay opción para desactivar firma.
+Una firma ausente/incorrecta devuelve 403; JSON inválido devuelve 400; cuerpo superior
+a 1 MiB devuelve 413. El verify token de GET no reemplaza la firma de POST.
+
+Referencias oficiales consultadas: [Webhooks de Graph API](https://developers.facebook.com/docs/graph-api/webhooks/getting-started/),
+[verificación documentada en el SDK oficial de Meta](https://whatsapp.github.io/WhatsApp-Nodejs-SDK/api-reference/webhooks/start/)
+y [código oficial de webhooks](https://github.com/WhatsApp/WhatsApp-Nodejs-SDK/blob/main/src/api/webhooks.ts).
+El portal developers.facebook.com respondió 429 durante esta revisión; se contrastó
+el mecanismo con las fuentes oficiales accesibles. El SDK está archivado y **no se
+instala ni se depende de él**; es una referencia del protocolo, no una garantía de
+vigencia futura. La verificación real del panel corresponde a la prueba manual.
+
+Solo se aceptan mensajes de texto del `phone_number_id` configurado en eventos
+`whatsapp_business_account` / `messages`. Estados de entrega, imágenes y estructuras
+válidas sin mensajes procesables se ignoran con 200. No se interpretan como comandos.
+La autorización ocurre antes de crear clientes GPS o ejecutar casos de uso.
+Un remitente no autorizado recibe como máximo el mensaje de acceso denegado y no
+recibe placas, ubicación, existencia de identificadores ni estado de GPSpace.
+
+`Inbox` reserva IDs de mensaje al encolar bajo un lock: el mismo ID no consulta,
+responde ni inicia vigilancia otra vez durante su retención. Conserva hasta 10.000
+IDs durante 7 días y una cola de 100 mensajes; un lote se acepta completo o ninguno.
+Si no cabe, devuelve 503 sin marcar sus nuevos IDs, para permitir reintento de Meta.
+No se expulsan IDs vigentes para hacer espacio. El orden es el de recepción local;
+no se reconstruye un orden global si Meta entrega eventos fuera de orden.
+
+La deduplicación y la cola son **solo memoria**: no garantizan procesamiento después
+de un corte/reinicio, ni deduplicación entre procesos o después del plazo de retención.
+Una vez aceptado el mensaje, un fallo de procesamiento/envío no hace que se ejecute
+otra vez al repetirse el webhook. El usuario puede enviar una nueva solicitud.
+
+### Menú y comandos
+
+`MENU`, `MENÚ` e `INICIO` muestran el menú y restablecen `IDLE` para ese remitente:
+
+```text
+🚑 GPS EMI — Biomédica
+1️⃣ Vigilar llegada de ambulancia
+2️⃣ Consultar ubicación
+3️⃣ Ver ambulancias en sede
+4️⃣ Ayuda
+```
+
+1 pasa a `WAITING_WATCH_IDENTIFIER`; 2 a `WAITING_LOCATION_IDENTIFIER`; 3 a
+`WAITING_SITE`; 4 o `AYUDA` muestra ayuda. Solo la opción 3 pide Poblado/Taller.
+La siguiente entrada ejecuta el caso de uso correspondiente. Sede inválida conserva
+la espera; después de una operación se regresa a `IDLE`. Ante un identificador
+inexistente/ambiguo se informa sin escoger un vehículo; usar otra vez 1/2 o un comando.
+
+Comandos rápidos, también válidos con estado pendiente:
+
+```text
+VIGILAR AMB-20
+VIGILAR PJU886
+UBICACION AMB-20
+UBICACIÓN PJU886
+UBICACION MOVIL- 96
+SEDE POBLADO
+SEDE TALLER
+MENU
+MENÚ
+INICIO
+AYUDA
+```
+
+Los verbos ignoran mayúsculas y espacios exteriores/repetidos entre verbo y argumento.
+El identificador se entrega al resolver existente conservando sus guiones y espacios
+internos. Un comando rápido reconocido reemplaza el estado pendiente. MENU reinicia
+la conversación, **no cancela la vigilancia**. Para detener esta en el piloto, usar
+Ctrl+C en el servidor y volver a levantarlo.
+
+Ubicación conserva Location, hora GPS, antigüedad humana, velocidad numérica/humana,
+ignición y GPSFix. STALE queda marcado y no oculta el dato. No se muestran campos de
+coordenadas. Inventario reutiliza orden y pertenencia exacta I3, conserva STALE y
+aclara que representa la última posición reportada. Fechas desconocidas se marcan
+con ❔. Textos largos se segmentan en mensajes de hasta 4096 caracteres.
+
+### Envío de texto y plantilla de llegada
+
+`WhatsAppClient.send_text` y `send_template` encapsulan exclusivamente HTTP hacia
+`https://graph.facebook.com/<versión>/<phone-number-id>/messages`. No siguen
+redirecciones, limitan tiempos de conexión/lectura y distinguen timeout, conexión,
+autenticación, HTTP no exitoso y respuesta inesperada. Un ID de respuesta significa
+**aceptación por Meta, no confirmación de entrega al celular**.
+
+La [política oficial de WhatsApp](https://business.whatsapp.com/policy) permite texto
+libre dentro de las 24 horas posteriores al último mensaje del usuario; fuera de esa
+ventana exige plantilla aprobada. `ServiceWindow` centraliza esa regla, con reloj
+inyectable y timestamp del mensaje firmado, no la hora de procesamiento. Mensajes
+excesivamente futuros se rechazan; se toleran 60 s de diferencia de reloj.
+Las ventanas solo se guardan para números autorizados. Tras un reinicio, el usuario
+debe escribir de nuevo. No se prolonga la ventana por mensajes salientes.
+
+La plantilla de llegada predeterminada debe existir y estar aprobada por Meta como
+Utility. Este código no la crea ni da por aprobada. Nombre e idioma son configurables.
+Propuesta de cuerpo, con cuatro variables de texto en este orden:
+
+```text
+🚑 Llegada de ambulancia
+La ambulancia {{1}}, placa {{2}}, registró llegada a {{3}}.
+Hora de la última posición reportada: {{4}}.
+La información reportada no garantiza ubicación física actual.
+```
+
+Parámetros: `mobile_number`, `plate`, `site`, `gps_timestamp`; ausencias se representan
+como N/D. Si `site=None` por pertenencia simultánea a ambas sedes, **se suprime la
+plantilla** y se conserva el evento en memoria para revisión, sin inventar una sede.
+En modo `text`, dentro de ventana, se muestran ambas con la aclaración de ambigüedad.
+
+Para probar sin plantilla personalizada aprobada, configurar explícitamente
+`WHATSAPP_ARRIVAL_MODE` con valor `text` y provocar la llegada dentro de la ventana.
+Fuera de ventana se conserva el evento y se registra que no pudo enviarse; no hay
+fallback automático a texto. Con `template`, se envía la plantilla tanto dentro
+como fuera de ventana y Meta decide si la acepta según aprobación y permisos.
+La disponibilidad de plantillas personalizadas con el emisor de prueba debe
+confirmarse en la cuenta Meta; no se sustituye por `hello_world` para simular llegada.
+
+`WhatsAppNotifier` conserva el último evento y su resultado (`accepted` o
+`delivery_error`). Un error de envío no reinicia ni borra estado/timestamp del monitor.
+El runner completa la llegada y no la repite. No se reintenta automáticamente un
+envío fallido: un timeout puede haber ocurrido después de aceptarlo Meta. El último
+runner/notificador está en memoria hasta iniciar otra vigilancia o cerrar el proceso;
+no existe bandeja persistente ni reenvío manual implementado.
+
+Los logs del canal registran verificación, autorización sin teléfonos, clase de
+comando, consulta, watch y resultado del transporte. Nunca cuerpos de mensajes,
+tokens, headers, URLs autenticadas ni excepciones originales. Los logs locales
+del runner I2 conservan sus identificadores técnicos/operacionales. Los errores de
+GPSpace recibidos por WhatsApp se traducen a mensajes controlados sin detalles HTTP.
+No activar access logs que incluyan query strings: el GET de Meta lleva verify token.
+
+### Pasos manuales en Meta y túnel HTTPS
+
+1. Abrir la **app de prueba existente** en Meta for Developers y entrar a WhatsApp
+   → API Setup / Configuración de la API (los rótulos pueden variar en el panel).
+2. En el campo emisor seleccionar el **número de prueba de Meta**. Copiar su Phone
+   Number ID a la configuración local. No usar “Add phone number” para registrar
+   el número institucional como emisor.
+3. En destinatarios de prueba agregar el celular de Biomédica con código de país
+   y completar la verificación que solicite Meta. Incluir ese mismo número en
+   `WHATSAPP_ALLOWED_NUMBERS`.
+4. Obtener el token de la app para el piloto con `whatsapp_business_messaging` y
+   guardarlo localmente. En App Settings → Basic obtener el App Secret de esa app.
+   Elegir un verify token aleatorio y guardarlo localmente. No compartir capturas
+   ni volcar estos valores. Los tokens temporales caducan y requieren renovación manual.
+5. Configurar las variables de la tabla y arrancar el servidor con el comando anterior.
+6. Instalar `cloudflared` siguiendo la [documentación oficial](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
+   En otra terminal, ejecutar:
+
+   ```powershell
+   cloudflared tunnel --url http://127.0.0.1:8000
+   ```
+
+   Copiar la URL HTTPS temporal `https://<subdominio>.trycloudflare.com` que imprime.
+   No requiere guardar credenciales de túnel en el repositorio. Es solo para pruebas,
+   no tiene garantía de disponibilidad y puede cambiar al reiniciarlo.
+7. En WhatsApp → Configuration / Configuración → Webhook, indicar como callback
+   `https://<subdominio>.trycloudflare.com/webhook` y el verify token local exacto.
+   Pulsar Verify and Save. El log debe indicar “Webhook verificado”.
+8. Suscribirse al campo **messages** del objeto `whatsapp_business_account`.
+   Confirmar que la app está suscrita a la WABA del número de prueba; si no llegan
+   mensajes, revisar esta suscripción siguiendo la
+   [colección oficial de Meta](https://www.postman.com/meta/whatsapp-business-platform/documentation/wlk6lh4/whatsapp-cloud-api).
+   No basta con que el GET de verificación funcione.
+9. Usar la prueba del campo messages del panel. Un payload de ejemplo con otro Phone
+   Number ID o remitente no autorizado puede ignorarse/denegarse: no quitar las
+   validaciones para hacerlo pasar. Luego enviar un mensaje real desde Biomédica
+   **al número de prueba de Meta** para abrir la ventana de atención.
+10. Para notificaciones por plantilla, en WhatsApp Manager crear la Utility con el
+    nombre/idioma/cuerpo de cuatro variables indicado y esperar aprobación. Si la
+    cuenta de prueba no lo permite, usar el modo explícito `text` dentro de ventana.
+11. Desde Biomédica ejecutar la secuencia siguiente y revisar mensajes/logs. Detener
+    servidor y túnel con Ctrl+C al terminar. No dejar la URL temporal como despliegue.
+
+### Secuencia de prueba real del usuario
+
+1. `MENU`: comprobar las cuatro opciones.
+2. `2`, luego `AMB-20`: comprobar ubicación; repetir `UBICACIÓN PJU886` para la misma
+   ambulancia. Verificar que `MOVIL- 96` se conserva cuando el proveedor lo entrega.
+3. `3`, luego `1`: inventario Poblado. `SEDE TALLER`: inventario Taller, STALE visible.
+4. `4` o `AYUDA`. Iniciar `2` y después `MENU`: debe reiniciar el estado pendiente.
+5. `VIGILAR AMB-20`: confirmar móvil/placa al resolver, sin elegir sede. Repetir
+   `VIGILAR PJU886` mientras está activa: debe informar que ya existe una vigilancia.
+6. Usar `MENU` y `UBICACION AMB-20` durante vigilancia: webhook y consultas siguen
+   disponibles. MENU no cancela el watch.
+7. Esperar una transición reportada fuera de ambas sedes → dentro de una. Una primera
+   lectura ya dentro o un cambio Taller/Poblado sin exterior no genera llegada.
+   Verificar plantilla aprobada o texto dentro de ventana según modo configurado.
+8. Opcionalmente, con otro destinatario de prueba que no esté en la allowlist,
+   comprobar que no obtiene información GPS. No ampliar autorización para esta prueba.
+
+### Validación y límites del piloto
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+git diff --check
+git status
+git diff --stat
+```
+
+Las 265 pruebas I1–I3 se conservan. I4-P agrega HTTP simulado, firmas sobre bytes,
+autorización, deduplicación concurrente, menú/comandos, formato, ventana de atención,
+una vigilancia, cancelación y respuestas HTTP mientras el watch está bloqueado.
+No usan Meta/GPSpace real, `.env`, ni sleeps de polling reales. Las pruebas de hilos
+usan eventos para sincronizar sin depender de la hora GPS real.
+
+Pendiente para I4 definitivo: persistencia de conversaciones/deduplicación/entregas,
+recuperación tras caída, seguimiento de estados de entrega, estrategia de reenvío,
+cancelación remota y soporte para otras identidades de Meta si fuera necesario.
+Las consultas se procesan secuencialmente: una adquisición lenta puede retrasar
+respuestas posteriores, aunque el webhook ya haya confirmado la recepción.
+Riesgos externos: caducidad de token/cookie, aprobación y disponibilidad de plantilla,
+restricciones del número de prueba, cambios de Graph API, reloj local y túnel temporal.
+La suite valida el software, no la configuración ni la entrega real de la cuenta Meta.
+
 ## Pendiente
 
-I4: WhatsApp. I5: despliegue VPS Ubuntu.
-No están implementados. Tampoco se incluye renovación automática de autenticación,
-persistencia, API, interfaz web, contenedores ni geocercas propias.
+I4 definitivo e I5 (despliegue permanente) no están implementados. No se incluyen
+VPS, systemd, Docker, base de datos, Redis/Celery, múltiples watches, panel web,
+login/renovación automática de GPSpace ni geocercas propias.

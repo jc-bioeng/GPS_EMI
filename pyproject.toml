@@ -7,10 +7,11 @@ name = "gps-emi"
 version = "0.1.0"
 description = "Monitor de llegada de una ambulancia EMI mediante Zones"
 requires-python = ">=3.10"
-dependencies = ["requests", "python-dotenv"]
+dependencies = ["requests", "python-dotenv", "Flask>=3.1,<4", "waitress>=3,<4"]
 
 [project.scripts]
 gps-emi = "gps_emi.cli:main"
+gps-emi-whatsapp = "gps_emi.whatsapp.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

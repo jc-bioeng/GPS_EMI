@@ -32,7 +32,7 @@ def local_now():
 class WatchRunner:
     def __init__(self, client: VehicleSource, identifier: str, destination: str | None,
                  notifier: NotificationService, config: WatchConfig | None = None,
-                 *, sleep=None, now=None):
+                 *, sleep=None, now=None, on_resolved=None, stop_event=None):
         if not identifier.strip():
             raise ValueError("Introduzca una placa o número de móvil.")
         if destination is not None and destination not in DESTINATIONS:
@@ -44,6 +44,9 @@ class WatchRunner:
         self.config = config or WatchConfig()
         self.sleep = sleep if sleep is not None else time.sleep
         self.now = now if now is not None else local_now
+        self.on_resolved = on_resolved
+        self.stop_event = stop_event
+        self.failure_code = None
         self.monitor: ArrivalMonitor | None = None
         self.vehid: str | None = None
         self.validator = ObservationValidator()
@@ -59,7 +62,14 @@ class WatchRunner:
         self._next_backoff = min(self.config.max_backoff, delay * 2)
         logger.warning("%s Fallo consecutivo %d; reintentando en %g s.",
                        message, self.consecutive_failures, delay)
-        self.sleep(delay)
+        self._wait(delay)
+
+    def _wait(self, seconds):
+        if self.stop_event is not None:
+            if self.stop_event.wait(seconds):
+                raise KeyboardInterrupt()
+        else:
+            self.sleep(seconds)
 
     def _recovered(self):
         if self.consecutive_failures:
@@ -113,28 +123,37 @@ class WatchRunner:
     def _run(self):
         logger.info("Vigilando %s → %s", self.identifier, self.destination or "EMI (Poblado o Taller)")
         while True:
+            if self.stop_event is not None and self.stop_event.is_set():
+                return 130
             try:
                 vehicles = self.client.get_vehicles()
             except TransientAcquisitionError as error:
                 self._retry(error.public_message)
                 continue
             except AcquisitionError as error:
+                self.failure_code = "acquisition"
                 logger.error("%s Vigilancia detenida.", error.public_message)
                 return 1
+            if self.stop_event is not None and self.stop_event.is_set():
+                return 130
             if self.vehid is None:
                 try:
                     vehicle = find_vehicle(vehicles, self.identifier)
                     if not vehicle.vehid:
+                        self.failure_code = "identity"
                         logger.error("El móvil resuelto no tiene VEHID; vigilancia detenida.")
                         return 1
                     vehicle = find_vehicle_by_id(vehicles, vehicle.vehid)
                 except VehicleResolutionError as error:
+                    self.failure_code = "not_found" if isinstance(error, VehicleNotFoundError) else "ambiguous"
                     logger.error("%s Vigilancia detenida.", error)
                     return 1
                 self.vehid = vehicle.vehid
                 self.monitor = ArrivalMonitor(vehicle.display_identifier, self.destination)
                 logger.info("Identificador resuelto: VEHID=%s, placa=%s, móvil=%s.",
                             vehicle.vehid, vehicle.plate, vehicle.mobile_number)
+                if self.on_resolved is not None:
+                    self.on_resolved(vehicle)
             else:
                 try:
                     vehicle = find_vehicle_by_id(vehicles, self.vehid)
@@ -142,12 +161,13 @@ class WatchRunner:
                     self._retry("El VEHID vigilado está temporalmente ausente; estado conservado.")
                     continue
                 except AmbiguousVehicleError:
+                    self.failure_code = "ambiguous"
                     logger.error("El VEHID vigilado es ambiguo; vigilancia detenida.")
                     return 1
             self._recovered()
             if self._process(vehicle):
                 return 0
-            self.sleep(self.config.polling_interval)
+            self._wait(self.config.polling_interval)
 
     def run(self) -> int:
         if self._result is not None:
@@ -158,6 +178,7 @@ class WatchRunner:
             logger.info("Vigilancia cancelada.")
             self._result = 130
         except Exception:
+            self.failure_code = "internal"
             # Nunca volcar excepciones desconocidas, cuerpos ni peticiones. No se
             # reintenta una notificación fallida: podría haberse enviado ya.
             logger.error("Error no recuperable durante la vigilancia; operación detenida.")
