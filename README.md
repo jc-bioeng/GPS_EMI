@@ -96,8 +96,27 @@ python -m venv .venv
 ```
 
 En Ubuntu se utiliza `.venv/bin/python` en lugar del ejecutable de Windows.
-Las dependencias de ejecución son `requests`, `python-dotenv`, `Flask` y `waitress`; las pruebas usan
-`pytest`. No hay rutas específicas de Windows en el núcleo.
+Las dependencias de ejecución son `requests`, `python-dotenv`, `Flask`, `waitress`
+y `tzdata` (base IANA para `zoneinfo`, necesaria en Windows o sistemas sin ella).
+`requirements.txt` incluye `requirements-runtime.txt`, con versiones exactas de
+dependencias directas y transitivas. Para desarrollo y pytest instala en su lugar
+`requirements-dev.txt`; no se necesita pytest en runtime. `pyproject.toml` mantiene
+rangos de compatibilidad; usa los requirements para reproducir las versiones
+validadas y actualízalos juntos tras ejecutar la suite. Python mínimo: 3.10.
+No hay rutas específicas de Windows en el núcleo.
+
+En Linux, instalación de runtime:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-runtime.txt
+.venv/bin/python -m pip install --no-deps .
+```
+
+Para desarrollo: `python -m pip install -r requirements-dev.txt` seguido de
+`python -m pip install --no-deps -e .`, usando el Python del entorno.
+Los requirements fijan dependencias de aplicación; la versión de Python y la
+herramienta de build de la futura imagen deberán fijarse al preparar Docker.
 
 Variables, sin valores de credenciales:
 
@@ -339,15 +358,23 @@ El timestamp se confirma únicamente después de pasar la observación al domini
 Los diagnósticos repetidos del mismo reporte se limitan para no saturar la consola;
 no se imprimen OUTSIDE/INSIDE por cada consulta duplicada.
 
-El parser observado entrega fechas sin zona. El reloj local del equipo debe estar
-sincronizado y usar la misma referencia horaria de esos reportes; I2 no inventa una
-zona del proveedor. Si una fecha queda en el futuro respecto al reloj local, se
+El parser conserva `Fecha` de GPSpace (`new Date(...)`) sin offset ni conversión.
+`clock.operational_now()` obtiene explícitamente la hora de `America/Bogota` con
+`zoneinfo` y entrega hora de pared naive para mantener esa representación.
+Es la referencia operativa EMI, no una garantía universal de WideTech. No se usa
+`vehDateTimeUTC` para reinterpretar `Fecha`. La timezone del host no afecta
+report_age, STALE ni el orden temporal; su reloj sí debe estar sincronizado.
+El evaluador conserva el umbral estricto `report_age > threshold`, duplicados,
+fuera de orden y rechazo de mezclas naive/aware. Si una fecha queda en el futuro
+respecto al reloj operativo, se
 advierte, pero no se descarta automáticamente. Una fecha futura procesada puede
 hacer que reportes posteriores parezcan fuera de orden hasta superar ese timestamp.
 
 ## Logging
 
-Se usa `logging` estándar con un handler de consola en stdout, hora y nivel.
+Se usa `logging` estándar con un handler en stdout, fecha/hora ISO con offset de
+Bogotá y nivel. Código y mensajes son Unicode; usar UTF-8 en stdout/stderr del
+runtime Linux (por ejemplo `PYTHONUTF8=1` si el entorno impone otro encoding).
 INFO incluye inicio, identificador resuelto, VEHID, placa/número, destino, estados
 nuevos, recuperación, ARRIVAL_DETECTED y finalización. WARNING incluye errores
 transitorios, STALE, GPSFix=0 y reportes no utilizables. ERROR indica finalización
@@ -600,11 +627,24 @@ una solicitud por placa y otra por móvil no crean un duplicado para ese propiet
 No ejecutar varias instancias del piloto
 ni una vigilancia CLI en paralelo: no existe coordinación entre procesos.
 
-Ctrl+C cierra la admisión, descarta solicitudes pendientes y señala cancelación
-de las vigilancias. Las esperas de polling/backoff son interrumpibles. Un HTTP ya iniciado
-no se puede cancelar: el cierre espera de forma acotada y los hilos son daemon.
+SIGTERM y Ctrl+C/SIGINT detienen la admisión y señalan parada a Inbox y polling
+antes de esperar los hilos. Se cierran listeners y canales de Waitress; las esperas
+de workers comparten un presupuesto de seis segundos. Los manejadores anteriores
+se restauran al salir. SIGTERM termina con código 0 y SIGINT con 130, sin traceback
+de cierre normal. Un HTTP ya iniciado no se puede cancelar; puede quedar truncado
+al salir el proceso porque los hilos son daemon. No se garantiza drenaje/entrega.
+Las esperas de polling/backoff son interrumpibles y se rechazan nuevas adquisiciones.
 **Las vigilancias activas se pierden al reiniciar el proceso.**
 Se conservan en memoria las completadas, canceladas y fallidas durante la sesión.
+
+`GET /health` devuelve HTTP 200, `application/json`, `{"status":"ok"}`. Es solo
+liveness HTTP: no accede a configuración, watches, Inbox, Meta ni GPSpace; tampoco
+valida cookies ni garantiza readiness del polling. No usar un fallo de sesión
+externa como motivo de reinicio automático mediante este endpoint.
+
+El entrypoint conserva `--host` y `--port`, por defecto `127.0.0.1:8000`.
+Una futura configuración de contenedor podrá pasar `--host 0.0.0.0`; esto no
+publica el puerto ni implementa proxy, TLS o Docker.
 
 ### Configuración local
 

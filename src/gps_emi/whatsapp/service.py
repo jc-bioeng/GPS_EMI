@@ -96,6 +96,9 @@ class WatchManager:
     def close(self, timeout=2):
         return self.polling.close(timeout)
 
+    def request_stop(self):
+        self.polling.request_stop()
+
     def list_active(self, owner_id):
         return self.manager.get_active_watches(owner_id)
 

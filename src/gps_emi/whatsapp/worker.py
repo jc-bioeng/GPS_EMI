@@ -74,11 +74,14 @@ class Inbox:
                 self.thread = Thread(target=self._run, name="gps-emi-messages", daemon=True)
                 self.thread.start()
 
-    def close(self, timeout=2):
+    def request_stop(self):
         with self.condition:
             self.closed = True
             self.pending.clear()
             self.condition.notify_all()
+
+    def close(self, timeout=2):
+        self.request_stop()
         if self.thread is not None:
             self.thread.join(timeout=timeout)
         return self.thread is None or not self.thread.is_alive()

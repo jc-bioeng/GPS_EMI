@@ -80,6 +80,10 @@ def create_app(config, inbox):
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES
 
+    @app.get("/health")
+    def health():
+        return {"status": "ok"}
+
     @app.get("/webhook")
     def verify():
         supplied = request.args.get("hub.verify_token", "")

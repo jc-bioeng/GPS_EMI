@@ -164,14 +164,17 @@ class FleetPolling:
         finally:
             logger.info('Polling de flota detenido.')
 
-    def close(self, timeout=2):
+    def request_stop(self):
         with self.condition:
             self.closed = True
             self.pending.clear()
             self.stop_event.set()
             self.manager.close()
             self.condition.notify_all()
-            thread = self.thread
+
+    def close(self, timeout=2):
+        self.request_stop()
+        thread = self.thread
         if thread is not None:
             thread.join(timeout=timeout)
         return thread is None or not thread.is_alive()

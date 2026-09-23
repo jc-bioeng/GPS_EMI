@@ -6,6 +6,7 @@ import sys
 from dotenv import load_dotenv
 
 from gps_emi.config import WatchConfig
+from gps_emi.clock import OperationalFormatter
 from gps_emi.monitoring.arrival import DESTINATIONS
 from gps_emi.monitoring.runner import watch_arrival
 from gps_emi.errors import TransientAcquisitionError
@@ -29,7 +30,7 @@ def configure_logging(level):
             handler.close()
     handler = logging.StreamHandler(sys.stdout)
     handler.gps_emi_console = True
-    handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s: %(message)s", "%H:%M:%S"))
+    handler.setFormatter(OperationalFormatter("[%(asctime)s] %(levelname)s: %(message)s"))
     app_logger.addHandler(handler)
 
 

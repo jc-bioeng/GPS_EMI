@@ -102,7 +102,9 @@ este incremento no cambia su texto en Meta. El modo text añade «La vigilancia
 ha finalizado» y conserva «última posición reportada». No se envía un segundo
 texto libre fuera de la ventana de atención para complementar una plantilla.
 
-Ctrl+C cierra admisión, descarta altas pendientes y cancela las activas. Las
+SIGTERM y Ctrl+C cierran admisión, descartan altas pendientes y cancelan las activas.
+Inbox y polling reciben parada antes de esperar los hilos, con seis segundos
+compartidos de presupuesto. Las
 esperas son interrumpibles. Una petición HTTP en curso puede superar la espera
 acotada de cierre; al regresar su snapshot se descarta. Un envío ya reservado
 puede terminar después de solicitar cierre. No hay recuperación tras reinicio.

@@ -5,6 +5,7 @@ import time
 from typing import Protocol
 
 from gps_emi.config import WatchConfig
+from gps_emi.clock import operational_now
 from gps_emi.errors import AcquisitionError, TransientAcquisitionError
 from gps_emi.models import Vehicle
 from gps_emi.monitoring.arrival import ArrivalMonitor, DESTINATIONS
@@ -25,8 +26,7 @@ class VehicleSource(Protocol):
 
 
 def local_now():
-    # WideTech entrega fechas sin offset. Se comparan con el reloj local del host.
-    return datetime.now()
+    return operational_now()
 
 
 class WatchRunner:

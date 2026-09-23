@@ -25,6 +25,8 @@ def test_server_wiring_and_shutdown(wa_config, monkeypatch):
     inbox.start.assert_called_once()
     inbox.close.assert_called_once()
     watches.close.assert_called_once()
+    assert 0 <= inbox.close.call_args.kwargs['timeout'] <= 6
+    assert 0 <= watches.close.call_args.kwargs['timeout'] <= 6
     runtime.close.assert_called_once()
     assert server.create_server.call_args.kwargs['host'] == '127.0.0.1'
     assert server.create_server.call_args.kwargs['port'] == 8001

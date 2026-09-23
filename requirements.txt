@@ -1,5 +1,2 @@
-requests
-python-dotenv
-pytest
-Flask>=3.1,<4
-waitress>=3,<4
+# Instalación runtime reproducible. Para pruebas: requirements-dev.txt.
+-r requirements-runtime.txt

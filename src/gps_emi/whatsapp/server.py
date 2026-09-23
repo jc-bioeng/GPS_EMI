@@ -1,6 +1,7 @@
 """Entrada explícita del piloto local, un proceso, sin reloader."""
 import argparse
 import logging
+import signal
 
 from dotenv import load_dotenv
 from waitress import create_server
@@ -14,6 +15,7 @@ from .delivery import Messenger, ServiceWindow
 from .service import MessageService, WatchManager
 from .webhook import create_app, MAX_BODY_BYTES
 from .worker import Inbox
+from .shutdown import Shutdown, ShutdownRequested
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +33,19 @@ def main(argv=None):
     if not 1 <= args.port <= 65535:
         parser.error("Puerto fuera de rango.")
     inbox = watches = server = None
+    shutdown = Shutdown()
     try:
+        shutdown.install()
         watch_config = WatchConfig(args.interval, args.initial_backoff, args.max_backoff, args.stale_warning_seconds)
         load_dotenv(dotenv_path=".env", override=False)
         config = WhatsAppConfig.from_env()
         messenger = Messenger(WhatsAppClient(config), ServiceWindow())
-        watches = WatchManager(WideTechClient, messenger, config, watch_config)
-        service = MessageService(config, messenger, watches, WideTechClient, watch_config)
+        def source_factory():
+            if shutdown.stopping.is_set():
+                raise RuntimeError("El proceso está cerrando.")
+            return WideTechClient()
+        watches = WatchManager(source_factory, messenger, config, watch_config)
+        service = MessageService(config, messenger, watches, source_factory, watch_config)
         inbox = Inbox(service.handle)
         app = create_app(config, inbox)
         server = create_server(app, host=args.host, port=args.port, threads=4,
@@ -46,6 +54,9 @@ def main(argv=None):
         logger.info("Piloto WhatsApp disponible en %s:%s/webhook; una sola instancia.", args.host, args.port)
         server.run()
         return 0
+    except ShutdownRequested:
+        logger.info("Deteniendo piloto WhatsApp por señal.")
+        return 130 if shutdown.signum == signal.SIGINT else 0
     except KeyboardInterrupt:
         logger.info("Deteniendo piloto WhatsApp.")
         return 130
@@ -56,12 +67,10 @@ def main(argv=None):
         logger.error("No se pudo ejecutar el piloto; revise configuración y disponibilidad del puerto.")
         return 1
     finally:
-        if watches is not None:
-            watches.close()
-        if inbox is not None:
-            inbox.close()
-        if server is not None:
-            server.close()
+        try:
+            shutdown.close(inbox, watches, server)
+        finally:
+            shutdown.restore()
 
 
 if __name__ == "__main__":
