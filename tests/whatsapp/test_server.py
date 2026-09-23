@@ -37,3 +37,27 @@ def test_invalid_watch_config_never_loads_env(monkeypatch):
     monkeypatch.setattr(server, 'load_dotenv', load)
     assert server.main(['--interval', '0']) == 1
     load.assert_not_called()
+
+
+def test_module_entrypoint_logs_startup_and_signal(monkeypatch, wa_config, caplog):
+    import runpy
+    import signal
+    import sys
+
+    handlers = {}
+    monkeypatch.setattr(signal, 'signal', lambda number, handler: handlers.setdefault(number, handler))
+    monkeypatch.setattr('dotenv.load_dotenv', lambda **kwargs: None)
+    monkeypatch.setattr(server.WhatsAppConfig, 'from_env', lambda: wa_config)
+    runtime = Mock()
+    runtime.run.side_effect = lambda: handlers[signal.SIGTERM](signal.SIGTERM, None)
+    monkeypatch.setattr('waitress.create_server', Mock(return_value=runtime))
+    monkeypatch.setattr('gps_emi.whatsapp.worker.Inbox', Mock())
+    monkeypatch.setattr('gps_emi.whatsapp.service.WatchManager', Mock())
+    monkeypatch.setattr(sys, 'argv', ['gps-emi-whatsapp'])
+    monkeypatch.delitem(sys.modules, 'gps_emi.whatsapp.server', raising=False)
+    with pytest.raises(SystemExit) as result:
+        runpy.run_module('gps_emi.whatsapp.server', run_name='__main__')
+    assert result.value.code == 0
+    assert 'Piloto WhatsApp disponible' in caplog.text
+    assert 'Deteniendo piloto WhatsApp por señal.' in caplog.text
+    assert all(record.name == 'gps_emi.whatsapp.server' for record in caplog.records)

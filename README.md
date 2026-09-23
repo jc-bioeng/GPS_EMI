@@ -917,8 +917,28 @@ Riesgos externos: caducidad de token/cookie, aprobación y disponibilidad de pla
 restricciones del número de prueba, cambios de Graph API, reloj local y túnel temporal.
 La suite valida el software, no la configuración ni la entrega real de la cuenta Meta.
 
+## Local Docker pilot
+
+Requiere Docker con Compose y `.env` local, ignorado por Git. Compose carga ese
+archivo únicamente como variables de runtime; no se copia al contexto ni a la imagen.
+
+```sh
+docker compose build
+docker compose up -d
+docker compose ps
+docker compose logs -f gps-emi
+docker compose down
+```
+
+El puerto se publica solo en `localhost:8000` (127.0.0.1). `/health` es liveness
+local y devuelve `{"status":"ok"}` sin consultar GPSpace ni Meta. Los logs salen
+por stdout/stderr. El cierre dispone de 15 segundos de gracia para el presupuesto
+interno de seis segundos. No hay volúmenes: reiniciar el contenedor pierde las
+watches activas y el estado conversacional temporal. La sesión de GPSpace todavía
+requiere renovación manual. Este piloto local no implementa VPS ni HTTPS.
+
 ## Pendiente
 
 I4 definitivo e I5 (despliegue permanente) no están implementados. No se incluyen
-VPS, systemd, Docker, base de datos, Redis/Celery, panel web,
+VPS, systemd, base de datos, Redis/Celery, panel web,
 login/renovación automática de GPSpace ni geocercas propias.

@@ -17,7 +17,7 @@ from .webhook import create_app, MAX_BODY_BYTES
 from .worker import Inbox
 from .shutdown import Shutdown, ShutdownRequested
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("gps_emi.whatsapp.server")
 
 
 def main(argv=None):

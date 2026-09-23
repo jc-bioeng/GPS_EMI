@@ -1,0 +1,23 @@
+# Allowlist: local configuration, history, tests and documentation never enter build.
+**
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!requirements-runtime.txt
+!src/
+!src/**
+
+# Exclude generated/sensitive files even inside src.
+**/.git
+**/.env
+**/.env.*
+**/*.env
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+**/tests
+**/docs
+**/build
+**/dist
+**/*.egg-info
