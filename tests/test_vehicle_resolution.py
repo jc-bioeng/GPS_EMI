@@ -12,13 +12,13 @@ from gps_emi.providers.widetech import WideTechClient, normalize_vehicle, parse
 from gps_emi.resolution import AmbiguousVehicleError, VehicleNotFoundError, find_vehicle
 
 
-@pytest.mark.parametrize('identifier', ['DEU942', 'AMB-20', 'deu942', 'amb-20', ' DEU942 ', ' amb-20 '])
+@pytest.mark.parametrize('identifier', ['DEU942', 'AMB-20', 'deu942', 'amb-20', ' DEU942 ', ' amb-20 ', 'amb20', ' AMB20 '])
 def test_resolve_either_identifier_to_same_vehicle(identifier):
     vehicle = Vehicle('1', 'DEU942', mobile_number='AMB-20')
     assert find_vehicle([vehicle], identifier) is vehicle
 
 
-@pytest.mark.parametrize('identifier', ['UNKNOWN', '', ' ', 'AMB', 'AMB20'])
+@pytest.mark.parametrize('identifier', ['UNKNOWN', '', ' ', 'AMB', 'MOVIL96'])
 def test_not_found(identifier):
     with pytest.raises(VehicleNotFoundError, match='No se encontró el móvil'):
         find_vehicle([Vehicle('1', 'DEU942', mobile_number='AMB-20')], identifier)
@@ -36,6 +36,14 @@ def test_ambiguous_including_cross_field_collision(other):
 def test_same_vehicle_matching_both_fields_is_not_ambiguous():
     vehicle = Vehicle('1', 'AMB-20', mobile_number='AMB-20')
     assert find_vehicle([vehicle], 'AMB-20') is vehicle
+
+
+def test_alias_collision_is_ambiguous_and_names_unchanged():
+    first = Vehicle('1', 'PJU886', mobile_number='AMB-20')
+    second = Vehicle('2', 'OTHER', mobile_number='amb20')
+    with pytest.raises(AmbiguousVehicleError):
+        find_vehicle([first, second], 'amb20')
+    assert first.mobile_number == 'AMB-20' and second.mobile_number == 'amb20'
 
 
 def test_provider_fields_remain_separate_without_inferred_mapping():
@@ -127,7 +135,7 @@ def test_observed_mobile_and_plate_resolve_same_vehicle(monkeypatch, observed_am
     assert by_number is by_plate is vehicles[0]
 
 
-@pytest.mark.parametrize('identifier', [' amb-20 ', ' pju886 '])
+@pytest.mark.parametrize('identifier', [' amb-20 ', ' pju886 ', 'amb20'])
 def test_observed_vehicle_monitor_and_notification(identifier, observed_amb20_payload, caplog):
     vehicle = normalize_vehicle(parse(observed_amb20_payload)[0])
     # Zones y timestamps se simulan para la transición; no son datos observados.

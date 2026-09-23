@@ -11,6 +11,7 @@ class State(str, Enum):
     WAITING_WATCH_IDENTIFIER = "WAITING_WATCH_IDENTIFIER"
     WAITING_LOCATION_IDENTIFIER = "WAITING_LOCATION_IDENTIFIER"
     WAITING_SITE = "WAITING_SITE"
+    WAITING_CANCEL = "WAITING_CANCEL"
 
 
 @dataclass(frozen=True)
@@ -28,9 +29,14 @@ def parse_command(text):
         return None
     verb = parts[0].upper()
     argument = parts[1].strip() if len(parts) == 2 else ""
-    simple = {"MENU": "menu", "MENÚ": "menu", "INICIO": "menu", "AYUDA": "help"}
+    simple = {"MENU": "menu", "MENÚ": "menu", "INICIO": "menu", "AYUDA": "help",
+              "VIGILANCIAS": "watch_menu", "MISVIGILANCIAS": "list_watches", "DETENER": "prompt_cancel"}
     if verb in simple:
         return Command(simple[verb]) if not argument else Command("invalid")
+    if verb == "CANCELAR":
+        return Command("cancel_id", argument) if argument else Command("cancel_operation")
+    if verb in ('VEHICLE_SELECT', 'VEHICLE_PAGE'):
+        return Command('vehicle_select' if verb == 'VEHICLE_SELECT' else 'vehicle_page', argument)
     if verb in ("VIGILAR", "UBICACION", "UBICACIÓN"):
         action = "watch" if verb == "VIGILAR" else "location"
         return Command(action, argument) if argument else Command("prompt_" + action)
@@ -50,7 +56,9 @@ class Conversation:
         state = self.states.get(sender, State.IDLE)
         if command is None:
             stripped = text.strip()
-            if state == State.WAITING_SITE:
+            if state == State.WAITING_CANCEL:
+                command = Command("cancel", stripped)
+            elif state == State.WAITING_SITE:
                 command = Command("site", SITES[stripped.upper()]) if stripped.upper() in SITES else Command("retry_site")
             elif state in (State.WAITING_LOCATION_IDENTIFIER, State.WAITING_WATCH_IDENTIFIER):
                 action = "watch" if state == State.WAITING_WATCH_IDENTIFIER else "location"
@@ -69,6 +77,8 @@ class Conversation:
             new_state, response = prompts[command.action]
             self.states[sender] = new_state
             return Command("reply", response)
-        responses = {"menu": fmt.MENU, "help": fmt.HELP,
+        if command.action == "menu":
+            return Command("menu", fmt.MENU)
+        responses = {"help": fmt.HELP,
                      "invalid": "No entendí el comando. Escribe MENU o AYUDA."}
         return Command("reply", responses[command.action]) if command.action in responses else command

@@ -51,3 +51,23 @@ class Messenger:
             if not self.windows.is_open(recipient):
                 raise WhatsAppError("service_window_closed")
             self.client.send_text(recipient, part)
+
+    def menu(self, recipient):
+        if not self.windows.is_open(recipient):
+            raise WhatsAppError("service_window_closed")
+        return self.client.send_menu(recipient)
+
+    def watch_menu(self, recipient):
+        if not self.windows.is_open(recipient):
+            raise WhatsAppError("service_window_closed")
+        return self.client.send_watch_menu(recipient)
+
+    def cancel_menu(self, recipient, watches):
+        if not self.windows.is_open(recipient):
+            raise WhatsAppError("service_window_closed")
+        return self.client.send_cancel_menu(recipient, watches)
+
+    def vehicle_selection(self, recipient, context, config=None, page=0):
+        if not self.windows.is_open(recipient):
+            raise WhatsAppError('service_window_closed')
+        return self.client.send_vehicle_selection(recipient, context, config, page)

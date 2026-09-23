@@ -124,7 +124,7 @@ def test_duplicate_webhook_one_query_one_response(wa_config, messenger):
     assert post(client, wa_config, data).status_code == 200
     assert not inbox.process_one()
     source.get_vehicles.assert_called_once()
-    messenger.client.send_text.assert_called_once()
+    assert messenger.client.send_text.call_count == 2  # Feedback y resultado, una sola vez.
 
 
 def test_unauthorized_webhook_end_to_end(wa_config, messenger):

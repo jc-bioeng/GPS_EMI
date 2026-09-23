@@ -8,7 +8,7 @@ from gps_emi.config import WatchConfig
 from gps_emi.models import Vehicle
 from gps_emi.monitoring import runner
 from gps_emi.monitoring.observation import ObservationAssessment, ObservationValidator
-from gps_emi.resolution import find_vehicle
+from gps_emi.resolution import find_vehicle, find_vehicle_by_id
 from gps_emi.sites import matching_sites, validate_site
 
 
@@ -47,7 +47,7 @@ class SiteResult:
     entries: tuple[LocationResult, ...]
 
 
-def _describe(vehicle: Vehicle, queried_at: datetime, config: WatchConfig) -> LocationResult:
+def describe_vehicle(vehicle: Vehicle, queried_at: datetime, config: WatchConfig) -> LocationResult:
     # Una consulta es un snapshot independiente, sin histórico de timestamps.
     # Se reutilizan el cálculo de antigüedad y el criterio STALE de I2.
     assessment = ObservationValidator().evaluate(vehicle, queried_at)
@@ -62,7 +62,7 @@ def get_vehicle_location(client: runner.VehicleSource, identifier: str,
     config = config or WatchConfig()
     vehicle = find_vehicle(client.get_vehicles(), identifier)
     queried_at = (now if now is not None else runner.local_now)()
-    return _describe(vehicle, queried_at, config)
+    return describe_vehicle(vehicle, queried_at, config)
 
 
 def _inventory_order(result: LocationResult):
@@ -72,6 +72,13 @@ def _inventory_order(result: LocationResult):
             vehicle.mobile_number.casefold(), vehicle.plate.casefold(), vehicle.vehid)
 
 
+def get_vehicle_location_by_id(client: runner.VehicleSource, vehid: str,
+                               config: WatchConfig | None = None, *, now=None) -> LocationResult:
+    """Refresca exclusivamente la identidad seleccionada; no hay fallback por nombre."""
+    vehicle = find_vehicle_by_id(client.get_vehicles(), vehid)
+    return describe_vehicle(vehicle, (now or runner.local_now)(), config or WatchConfig())
+
+
 def list_vehicles_at_site(client: runner.VehicleSource, site: str,
                           config: WatchConfig | None = None, *, now=None) -> SiteResult:
     """Una adquisición para todo el inventario; STALE nunca excluye un registro."""
@@ -79,6 +86,6 @@ def list_vehicles_at_site(client: runner.VehicleSource, site: str,
     config = config or WatchConfig()
     vehicles = client.get_vehicles()
     queried_at = (now if now is not None else runner.local_now)()
-    entries = [_describe(vehicle, queried_at, config) for vehicle in vehicles
+    entries = [describe_vehicle(vehicle, queried_at, config) for vehicle in vehicles
                if site in matching_sites(vehicle.zones)]
     return SiteResult(site, queried_at, tuple(sorted(entries, key=_inventory_order)))

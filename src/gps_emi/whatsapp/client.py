@@ -3,6 +3,8 @@ import logging
 import requests
 
 from .config import normalize_number
+from .menu import menu_payload, cancel_menu_payload
+from .vehicle_selection import selection_payload
 
 logger = logging.getLogger(__name__)
 TEXT_LIMIT = 4096
@@ -65,6 +67,18 @@ class WhatsAppClient:
         if not isinstance(text, str) or not text.strip() or len(text) > TEXT_LIMIT:
             raise WhatsAppError("configuration")
         return self._send(recipient, {"type": "text", "text": {"body": text, "preview_url": False}})
+
+    def send_menu(self, recipient):
+        return self._send(recipient, {"type": "interactive", "interactive": menu_payload()})
+
+    def send_watch_menu(self, recipient):
+        return self._send(recipient, {"type": "interactive", "interactive": menu_payload(watches=True)})
+
+    def send_cancel_menu(self, recipient, watches):
+        return self._send(recipient, {"type": "interactive", "interactive": cancel_menu_payload(watches)})
+
+    def send_vehicle_selection(self, recipient, context, config=None, page=0):
+        return self._send(recipient, {'type': 'interactive', 'interactive': selection_payload(context, config, page)})
 
     def send_template(self, recipient, name, language, parameters):
         if not name or not language or any(not isinstance(p, str) or not p for p in parameters):

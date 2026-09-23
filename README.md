@@ -520,8 +520,9 @@ Meta → Flask /webhook → firma + extracción + Inbox/deduplicación → HTTP 
                     │                       │                    │
                 LocationResult          SiteResult         hilo único
                     │                       │                    │
-                    └────── formatters ─────┘                WatchRunner
-                                  │                          ArrivalEvent
+                    └────── formatters ─────┘           FleetPolling (1 snapshot)
+                                  │                     N Watches / N monitores
+                                  │                          ArrivalEvents
                               Messenger                          │
                                   │                       WhatsAppNotifier
                                   └──────── WhatsAppClient ──────┘
@@ -538,25 +539,72 @@ Los módulos están en `src/gps_emi/whatsapp/`: `config.py`, `client.py`, `deliv
 `webhook.py`, `worker.py`, `routing.py`, `service.py`, `formatting.py`, `notifier.py`
 y `server.py`. Los tests están en `tests/whatsapp/`.
 
+### Interfaz WhatsApp
+
+`MENU`, `MENÚ` e `INICIO` envían una lista nativa con el encabezado
+«🚑 GPS EMI — Biomédica», la pregunta «¿Qué deseas hacer?» y el botón
+«Ver opciones». Sus filas son Vigilar llegada, Consultar ubicación,
+Ver ambulancias en sede, Ayuda y Gestionar vigilancias. `menu.py` centraliza los IDs estables y el
+payload; las respuestas `button_reply` y `list_reply` se convierten a comandos
+del mismo flujo existente, sin depender del título visible. Los números 1–4
+y los comandos de texto siguen funcionando. Se utiliza lista porque los reply
+buttons admiten hasta tres opciones ([referencia de Meta](https://whatsapp.github.io/WhatsApp-Nodejs-SDK/api-reference/messages/interactive/)).
+
+Ubicación y sede envían un único «🔎 Consultando ...» desde el worker antes de
+consultar GPSpace, seguido del resultado o error. No hay nuevos hilos; si hay
+trabajo previo en la cola, el feedback espera su turno. Un fallo de envío del
+feedback no cancela la consulta. La aceptación del envío por Meta no garantiza
+entrega inmediata. El menú respeta la misma ventana de atención de 24 horas.
+
+WhatsApp muestra «⚠️ Hace 6 min» o «🟢 Hace 28 s» sin la palabra técnica STALE.
+La clasificación, umbral y orden internos permanecen iguales. Los inventarios
+conservan móvil, placa y GPSFix, y muestran movimiento. La consola conserva su
+presentación. En ambos canales, la resolución compartida acepta `amb20` como
+`AMB-20`; solo admite este alias para AMB seguido de dígitos, sin cambiar los
+nombres recibidos ni eliminar separadores de otros identificadores. Si el alias
+coincide con varios vehículos, informa ambigüedad.
+
+Prueba manual con la configuración y el webhook reales ya existentes:
+
+1. Reiniciar el proceso desde la raíz con
+   `.\.venv\Scripts\python.exe -m gps_emi.whatsapp.server`, conservando el túnel
+   HTTPS y la suscripción de Meta configurados. No iniciar una segunda instancia.
+2. Desde un número autorizado, enviar MENU y tocar Ver opciones. Probar las
+   cinco filas; en ubicación responder `amb20`, en sede probar 1 y 2. Vigilar
+   llegada inicia la vigilancia real existente; usarla cuando se quiera monitorear.
+3. Probar también `UBICACION amb20`, `SEDE POBLADO`, `SEDE TALLER`, `AYUDA` y
+   MENU seguido de los números 1–4. Confirmar un feedback y después el resultado
+   en cada consulta, así como reportes recientes/antiguos sin la palabra STALE.
+4. Comparar identidad, posición, antigüedad y GPSFix con los datos reportados;
+   `MOVIL- 96` debe conservarse literalmente. En consola probar
+   `.\.venv\Scripts\python.exe gpspace_loaddatalog.py --action location --identifier amb20`.
+
+Estas pruebas manuales quedan pendientes para esta mejora de interfaz. Los tests
+son offline y no validan la visualización ni entrega reales en WhatsApp.
+
 Ubicación y sede llaman a los casos de uso I3 originales, con una adquisición por
 operación. No se duplican geocercas, resolución, clasificación de velocidad, orden
-fresh/STALE ni antigüedad. `WatchManager` reutiliza directamente `WatchRunner` de I2/I3.
-El runner incorpora opciones neutrales al canal: `on_resolved` para confirmar la
-identidad real, `stop_event` para detener esperas y `failure_code` para comunicar
-un error controlado. Su comportamiento por defecto y `ConsoleNotifier` se conservan.
-`ArrivalMonitor`, `Vehicle`, el parser WideTech y la CLI I3 permanecen intactos.
+fresh/STALE ni antigüedad. `FleetPolling` obtiene un snapshot por ciclo y el
+`WatchManager` de dominio lo distribuye a N Watches, cada una con su propio
+`ObservationValidator` y `ArrivalMonitor`. `WatchRunner` y `ConsoleNotifier`
+se conservan para consola. Véase [gestión de múltiples vigilancias](docs/multiple-watches.md).
+`ArrivalMonitor`, `Vehicle` y la CLI I3 permanecen intactos. El parser WideTech
+normaliza el markup HTML de `Zones` antes de entregar los nombres al dominio;
+la comparación posterior de geocercas sigue siendo exacta.
 
 El POST solo valida y encola: no espera HTTP de GPSpace/Meta ni polling. Un worker
-procesa consultas y respuestas en orden de recepción local. La vigilancia utiliza
-otro hilo y reserva atómicamente **un único puesto global por proceso**, incluyendo
-su resolución inicial. Otra solicitud recibe un aviso de vigilancia activa, sin
-revelar datos de la vigilancia existente. No ejecutar varias instancias del piloto
+procesa consultas y respuestas en orden de recepción local. Las vigilancias utilizan
+otro hilo compartido: las altas pendientes se resuelven con el mismo snapshot
+que alimenta las Watches activas. La unicidad es **owner_id + VEHID + ACTIVE**;
+una solicitud por placa y otra por móvil no crean un duplicado para ese propietario.
+No ejecutar varias instancias del piloto
 ni una vigilancia CLI en paralelo: no existe coordinación entre procesos.
 
 Ctrl+C cierra la admisión, descarta solicitudes pendientes y señala cancelación
-del watch. Las esperas de polling/backoff son interrumpibles. Un HTTP ya iniciado
+de las vigilancias. Las esperas de polling/backoff son interrumpibles. Un HTTP ya iniciado
 no se puede cancelar: el cierre espera de forma acotada y los hilos son daemon.
-Al reiniciar se pierde todo estado y una vigilancia debe solicitarse otra vez.
+**Las vigilancias activas se pierden al reiniciar el proceso.**
+Se conservan en memoria las completadas, canceladas y fallidas durante la sesión.
 
 ### Configuración local
 
@@ -658,7 +706,10 @@ otra vez al repetirse el webhook. El usuario puede enviar una nueva solicitud.
 `WAITING_SITE`; 4 o `AYUDA` muestra ayuda. Solo la opción 3 pide Poblado/Taller.
 La siguiente entrada ejecuta el caso de uso correspondiente. Sede inválida conserva
 la espera; después de una operación se regresa a `IDLE`. Ante un identificador
-inexistente/ambiguo se informa sin escoger un vehículo; usar otra vez 1/2 o un comando.
+inexistente se informa sin escoger un vehículo. En WhatsApp, un identificador ambiguo
+ofrece una lista de candidatos para continuar ubicación o vigilancia por VEHID exacto;
+no se elige automáticamente ningún registro. Véase el
+[protocolo de selección explícita](docs/vehicle-selection.md).
 
 Comandos rápidos, también válidos con estado pendiente:
 
@@ -787,10 +838,10 @@ No activar access logs que incluyan query strings: el GET de Meta lleva verify t
 
 ### Secuencia de prueba real del usuario
 
-1. `MENU`: comprobar las cuatro opciones.
+1. `MENU`: comprobar las opciones originales y Gestionar vigilancias.
 2. `2`, luego `AMB-20`: comprobar ubicación; repetir `UBICACIÓN PJU886` para la misma
    ambulancia. Verificar que `MOVIL- 96` se conserva cuando el proveedor lo entrega.
-3. `3`, luego `1`: inventario Poblado. `SEDE TALLER`: inventario Taller, STALE visible.
+3. `3`, luego `1`: inventario Poblado. `SEDE TALLER`: inventario Taller, antigüedad visible sin la palabra STALE.
 4. `4` o `AYUDA`. Iniciar `2` y después `MENU`: debe reiniciar el estado pendiente.
 5. `VIGILAR AMB-20`: confirmar móvil/placa al resolver, sin elegir sede. Repetir
    `VIGILAR PJU886` mientras está activa: debe informar que ya existe una vigilancia.
@@ -813,7 +864,7 @@ git diff --stat
 
 Las 265 pruebas I1–I3 se conservan. I4-P agrega HTTP simulado, firmas sobre bytes,
 autorización, deduplicación concurrente, menú/comandos, formato, ventana de atención,
-una vigilancia, cancelación y respuestas HTTP mientras el watch está bloqueado.
+múltiples vigilancias, cancelación individual y respuestas HTTP mientras el polling está bloqueado.
 No usan Meta/GPSpace real, `.env`, ni sleeps de polling reales. Las pruebas de hilos
 usan eventos para sincronizar sin depender de la hora GPS real.
 
@@ -829,5 +880,5 @@ La suite valida el software, no la configuración ni la entrega real de la cuent
 ## Pendiente
 
 I4 definitivo e I5 (despliegue permanente) no están implementados. No se incluyen
-VPS, systemd, Docker, base de datos, Redis/Celery, múltiples watches, panel web,
+VPS, systemd, Docker, base de datos, Redis/Celery, panel web,
 login/renovación automática de GPSpace ni geocercas propias.

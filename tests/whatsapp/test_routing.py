@@ -107,10 +107,10 @@ def test_menu_and_quick_watch_same_manager(service, steps, identifier):
     service.source_factory.assert_not_called()
 
 
-def test_busy_watch_no_new_gps(service):
+def test_closed_watch_service_no_new_gps(service):
     service.watches.start.return_value = False
     deliver(service, 'VIGILAR AMB-20')
-    assert service.messenger.client.send_text.call_args.args[1] == fmt.BUSY
+    assert 'servicio de vigilancias está detenido' in service.messenger.client.send_text.call_args.args[1]
     service.source_factory.assert_not_called()
 
 
@@ -119,7 +119,11 @@ def test_busy_watch_no_new_gps(service):
 def test_resolution_errors(service, rows, fragment):
     service.source_factory.return_value.get_vehicles.return_value = rows
     deliver(service, 'UBICACION X')
-    assert fragment in service.messenger.client.send_text.call_args.args[1]
+    if rows:
+        context = service.messenger.client.send_vehicle_selection.call_args.args[1]
+        assert context.candidates == tuple(rows)
+    else:
+        assert fragment in service.messenger.client.send_text.call_args.args[1]
 
 
 @pytest.mark.parametrize('error', [SessionExpiredError, TransientAcquisitionError, RuntimeError])

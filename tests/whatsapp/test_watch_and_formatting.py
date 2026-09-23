@@ -34,7 +34,9 @@ def test_location_format_reuses_i3(speed, expected, age, stale):
     source.get_vehicles.return_value = [replace(vehicle(), speed=speed)]
     result = get_vehicle_location(source, 'AMB-20', now=lambda: BASE + timedelta(seconds=age))
     text = format_location(result)
-    assert expected in text and ('STALE' in text) == stale
+    assert expected in text and 'STALE' not in text
+    assert result.stale is stale
+    assert ('⚠️' in text) == stale
     assert 'AMB-20' in text and 'PJU886' in text and 'Dirección original' in text
     assert 'Hora GPS:' in text and 'Ignición: Encendida' in text
     assert 'latitud' not in text.lower() and 'longitud' not in text.lower()
@@ -61,7 +63,9 @@ def test_inventory_reuses_order_and_conservative_freshness():
     result = list_vehicles_at_site(source, EMI_SITES[0], now=lambda: BASE + timedelta(seconds=600))
     text = format_site(result)
     assert text.index('FRESH') < text.index('OLD') < text.index('UNKNOWN')
-    assert '🟢 FRESH' in text and '⚠️ STALE OLD' in text and '❔ UNKNOWN' in text
+    assert '🟢 Hace 40 s' in text and '⚠️ Hace 10 min' in text and '❔' in text
+    assert 'STALE' not in text
+    assert [entry.stale for entry in result.entries] == [False, True, None]
     assert 'última posición reportada' in text and 'no garantiza' in text
     assert 'latitud' not in text.lower() and 'longitud' not in text.lower()
     source.get_vehicles.return_value = []
@@ -135,7 +139,7 @@ def test_runner_cooperative_shutdown(phase):
         source.get_vehicles.assert_not_called()
 
 
-def test_manager_one_watch_and_confirmation(wa_config, messenger):
+def test_manager_accepts_pending_watches_during_acquisition(wa_config, messenger):
     messenger.windows.note(NUMBER, 1000000)
     started, release = Event(), Event()
     source = Mock()
@@ -148,7 +152,7 @@ def test_manager_one_watch_and_confirmation(wa_config, messenger):
     assert manager.start(NUMBER, 'AMB-20')
     try:
         assert started.wait(timeout=1)
-        assert not manager.start(NUMBER, 'PJU886')
+        assert manager.start(NUMBER, 'PJU886')
         assert manager.active
     finally:
         manager.stop_event.set()
@@ -177,7 +181,7 @@ def test_webhook_returns_while_watch_is_blocked(wa_config, messenger):
         assert started.wait(timeout=1)
         assert post(client, wa_config, payload(wa_config, identifier='menu')).status_code == 200
         assert inbox.process_one()
-        assert 'GPS EMI — Biomédica' in messenger.client.send_text.call_args.args[1]
+        messenger.client.send_menu.assert_called_once_with(NUMBER)
         assert manager.active
     finally:
         manager.stop_event.set()
@@ -203,26 +207,24 @@ def test_manager_reports_resolution_error_without_false_start(wa_config, messeng
 
 @pytest.mark.parametrize('identifier', ['AMB-20', 'PJU886'])
 @pytest.mark.parametrize('confirmation_fails', [False, True])
-def test_manager_real_runner_confirmation_then_arrival(wa_config, messenger, identifier, confirmation_fails):
+def test_manager_shared_polling_confirmation_then_arrival(wa_config, messenger, identifier, confirmation_fails):
     messenger.windows.note(NUMBER, 1000000)
     if confirmation_fails:
         messenger.client.send_text.side_effect = WhatsAppError('connection')
     source = Mock()
     source.get_vehicles.side_effect = [[vehicle()], [vehicle(60, True)]]
-    def runner_factory(*args, **kwargs):
-        # Ejecución real del runner, reloj/espera simulados.
-        kwargs.pop('stop_event')
-        return WatchRunner(*args, **kwargs, sleep=Mock(), now=lambda: BASE + timedelta(minutes=5))
-    manager = WatchManager(lambda: source, messenger, wa_config, runner_factory=runner_factory)
+    manager = WatchManager(lambda: source, messenger, wa_config, autostart=False)
     try:
         assert manager.start(NUMBER, identifier)
-        manager.thread.join(timeout=1)
+        manager.polling.cycle()
+        manager.polling.cycle()
         assert not manager.active
-        assert manager.last_runner.monitor.state == MonitorState.ARRIVAL_DETECTED
+        watch, = manager.manager.list_watches(NUMBER)
+        assert watch.monitor.state == MonitorState.ARRIVAL_DETECTED
         text = messenger.client.send_text.call_args.args[1]
         assert 'Vigilancia iniciada' in text and 'AMB-20' in text and 'PJU886' in text
         messenger.client.send_template.assert_called_once()
-        assert manager.last_notifier.accepted
+        assert watch.notification_status == 'accepted'
         assert source.get_vehicles.call_count == 2  # Sin consulta de preflight adicional.
     finally:
         manager.close(timeout=0)

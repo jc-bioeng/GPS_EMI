@@ -1,5 +1,8 @@
 """Resolución sobre los vehículos de la flota autorizada que entrega el cliente."""
 from collections.abc import Iterable
+from dataclasses import dataclass
+from enum import Enum
+import re
 
 from gps_emi.models import Vehicle
 
@@ -13,27 +16,57 @@ class VehicleNotFoundError(VehicleResolutionError):
 
 
 class AmbiguousVehicleError(VehicleResolutionError):
-    pass
+    def __init__(self, message, candidates=()):
+        super().__init__(message)
+        self.candidates = tuple(candidates)
 
 
-def find_vehicle(vehicles: Iterable[Vehicle], identifier: str) -> Vehicle:
-    """Coincidencia exacta en cualquiera de los dos campos, sin priorizar uno.
+class ResolutionStatus(str, Enum):
+    NOT_FOUND = 'NOT_FOUND'
+    RESOLVED = 'RESOLVED'
+    AMBIGUOUS = 'AMBIGUOUS'
+
+
+@dataclass(frozen=True, repr=False)
+class VehicleResolution:
+    status: ResolutionStatus
+    candidates: tuple[Vehicle, ...]
+
+    @property
+    def vehicle(self):
+        return self.candidates[0] if self.status == ResolutionStatus.RESOLVED else None
+
+
+def identifier_key(value: str) -> str:
+    key = value.strip().casefold()
+    return re.sub(r"^amb-?([0-9]+)$", r"amb-\1", key)
+
+
+def resolve_vehicle(vehicles: Iterable[Vehicle], identifier: str) -> VehicleResolution:
+    """Coincidencia en ambos campos con alias AMB20/AMB-20, sin prioridades.
 
     La colección debe provenir de WideTechClient.get_vehicles(), que aplica el
     filtro de flota. Una fila que coincida en ambos campos cuenta una sola vez.
     """
-    key = identifier.strip().casefold()
+    key = identifier_key(identifier)
     matches = [vehicle for vehicle in vehicles if key and any(
-        value.strip().casefold() == key
+        identifier_key(value) == key
         for value in (vehicle.plate, vehicle.mobile_number)
     )]
-    if not matches:
+    status = ResolutionStatus.NOT_FOUND if not matches else ResolutionStatus.RESOLVED if len(matches) == 1 else ResolutionStatus.AMBIGUOUS
+    return VehicleResolution(status, tuple(matches))
+
+
+def find_vehicle(vehicles: Iterable[Vehicle], identifier: str) -> Vehicle:
+    """Interfaz fail-safe conservada para CLI y consumidores existentes."""
+    result = resolve_vehicle(vehicles, identifier)
+    if result.status == ResolutionStatus.NOT_FOUND:
         raise VehicleNotFoundError("No se encontró el móvil entre Ambulancias Medellín.")
-    if len(matches) > 1:
+    if result.status == ResolutionStatus.AMBIGUOUS:
         raise AmbiguousVehicleError(
-            "El identificador es ambiguo: coincide con varios móviles de Ambulancias Medellín."
+            "El identificador es ambiguo: coincide con varios móviles de Ambulancias Medellín.", result.candidates
         )
-    return matches[0]
+    return result.vehicle
 
 
 def find_vehicle_by_id(vehicles: Iterable[Vehicle], vehid: str) -> Vehicle:

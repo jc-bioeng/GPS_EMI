@@ -6,6 +6,7 @@ El endpoint es interno/no documentado y puede cambiar.
 import os
 import re
 from datetime import datetime
+from html.parser import HTMLParser
 import requests
 
 from gps_emi.models import Vehicle, normalize_plate
@@ -198,8 +199,36 @@ def parse(text):
     return result
 
 
+class _ZoneText(HTMLParser):
+    """Extrae texto, sin ejecutar HTML ni cargar recursos externos."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.hidden = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ('script', 'style'):
+            self.hidden.append(tag)
+
+    def handle_endtag(self, tag):
+        if self.hidden and tag == self.hidden[-1]:
+            self.hidden.pop()
+
+    def handle_data(self, data):
+        if not self.hidden:
+            self.parts.append(data)
+
+
 def zone_list(value):
-    return re.findall(r"\{([^{}]+)\}", value or "")
+    parser = _ZoneText()
+    parser.feed(value or "")
+    parser.close()
+    text = ''.join(parser.parts)
+    # Conservar el formato delimitado observado y sus nombres exactos.
+    # También aceptar una única zona sin delimitadores, envuelta en HTML o texto.
+    if '{' in text or '}' in text:
+        return re.findall(r"\{([^{}]+)\}", text)
+    return [text] if text else []
 
 
 

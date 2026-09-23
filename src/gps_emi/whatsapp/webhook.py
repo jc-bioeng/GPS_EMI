@@ -7,6 +7,7 @@ import logging
 import math
 
 from flask import Flask, request, Response
+from .menu import interactive_command
 
 logger = logging.getLogger(__name__)
 MAX_BODY_BYTES = 1024 * 1024
@@ -45,7 +46,22 @@ def extract_messages(payload, phone_number_id):
                 continue
             for message in _objects(value.get("messages")):
                 text = message.get("text")
-                if message.get("type") != "text" or not isinstance(text, dict):
+                if message.get("type") == "interactive":
+                    interactive = message.get("interactive")
+                    if not isinstance(interactive, dict):
+                        continue
+                    kind = interactive.get("type")
+                    if kind not in ("button_reply", "list_reply"):
+                        continue
+                    reply = interactive.get(kind)
+                    selection = reply.get("id") if isinstance(reply, dict) else None
+                    command = interactive_command(selection)
+                    if command is None:
+                        continue
+                    text = {"body": command}
+                elif message.get("type") != "text":
+                    continue
+                if not isinstance(text, dict):
                     continue
                 body, sender, identifier = text.get("body"), message.get("from"), message.get("id")
                 if (not all(isinstance(s, str) and s for s in (body, sender, identifier))
