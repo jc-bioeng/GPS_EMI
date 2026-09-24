@@ -4,6 +4,7 @@ import logging
 from threading import Condition, Event, Lock, Thread
 
 from gps_emi.config import WatchConfig
+from gps_emi.clock import acquisition_now
 from gps_emi.errors import AcquisitionError, TransientAcquisitionError
 from gps_emi.resolution import find_vehicle, find_vehicle_by_id, VehicleNotFoundError, AmbiguousVehicleError
 
@@ -21,11 +22,13 @@ class WatchRequest:
 
 class FleetPolling:
     def __init__(self, source_factory, manager, *, config=None, on_created=None,
-                 on_error=None, on_terminal=None, on_selection=None, thread_factory=Thread, autostart=True):
+                 on_error=None, on_terminal=None, on_selection=None, thread_factory=Thread, autostart=True,
+                 collector=None):
         self.source_factory, self.manager = source_factory, manager
         self.config = config or WatchConfig()
         self.on_created, self.on_error, self.on_terminal = on_created, on_error, on_terminal
         self.on_selection = on_selection
+        self.collector = collector
         self.thread_factory, self.autostart = thread_factory, autostart
         self.condition, self.cycle_lock = Condition(), Lock()
         self.stop_event = Event()
@@ -77,6 +80,7 @@ class FleetPolling:
                     return None
             try:
                 vehicles = list(self.source_factory().get_vehicles())
+                acquired_at = acquisition_now()
             except TransientAcquisitionError:
                 self.consecutive_failures += 1
                 delay = self.next_backoff
@@ -130,6 +134,12 @@ class FleetPolling:
             self.next_backoff = self.config.initial_backoff
             # La confirmación usa la primera observación ya evaluada, sin otra adquisición.
             self.manager.process_snapshot(vehicles)
+            # submit no hace I/O: el escritor SQLite queda fuera del camino operativo.
+            if self.collector is not None:
+                try:
+                    self.collector.submit(vehicles, acquired_at)
+                except Exception:
+                    logger.warning('Collector no disponible; snapshot omitido, operación conservada.')
             for watch, is_new in created:
                 if is_new:
                     watch = self.manager.get_watch(watch.owner_id, watch.watch_id)

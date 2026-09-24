@@ -4,6 +4,13 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      GPS_EMI_DATA_DB: /data/gps_observations.db
+    volumes:
+      - gps-observations:/data
     ports:
       - "127.0.0.1:8000:8000"
     stop_grace_period: 15s
+
+volumes:
+  gps-observations:

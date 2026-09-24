@@ -245,6 +245,9 @@ def normalize_vehicle(row):
         speed=float(speed) if speed not in (None, "") else None,
         ignition=row.get("StateIgnition"), gps_fix=row.get("GPSFix"),
         zones=zone_list(row.get("Zones")),
+        latitude=row.get("Latitude"), longitude=row.get("Longitude"),
+        zones_raw=row.get("Zones"),
+        vehicle_name_raw=row.get("VEH_NAM"), vehicle_license_raw=row.get("VEH_LCNS"),
     )
 
 

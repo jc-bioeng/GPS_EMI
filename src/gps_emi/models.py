@@ -17,6 +17,11 @@ class Vehicle:
     gps_fix: bool | int | str | None = None
     zones: list[str] = field(default_factory=list)
     mobile_number: str = ""
+    latitude: float | str | None = None
+    longitude: float | str | None = None
+    zones_raw: str | None = None
+    vehicle_name_raw: str | None = None
+    vehicle_license_raw: str | None = None
 
     @property
     def display_identifier(self) -> str:

@@ -6,6 +6,11 @@ from zoneinfo import ZoneInfo
 BOGOTA = ZoneInfo("America/Bogota")
 
 
+def acquisition_now():
+    """Instante inequívoco de adquisición, independiente del timezone del host."""
+    return datetime.now(BOGOTA)
+
+
 def operational_now():
     # Fecha de GPSpace se conserva naive, como hora de pared operativa EMI.
     # No se reinterpreta ni convierte el timestamp recibido del proveedor.

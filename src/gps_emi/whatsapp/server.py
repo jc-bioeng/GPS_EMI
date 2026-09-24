@@ -9,6 +9,7 @@ from waitress import create_server
 from gps_emi.cli import configure_logging
 from gps_emi.config import WatchConfig
 from gps_emi.providers.widetech import WideTechClient
+from gps_emi.analysis.collector import start_collector
 from .client import WhatsAppClient
 from .config import WhatsAppConfig, WhatsAppConfigError
 from .delivery import Messenger, ServiceWindow
@@ -32,7 +33,7 @@ def main(argv=None):
     configure_logging("INFO")
     if not 1 <= args.port <= 65535:
         parser.error("Puerto fuera de rango.")
-    inbox = watches = server = None
+    inbox = watches = server = collector = None
     shutdown = Shutdown()
     try:
         shutdown.install()
@@ -44,7 +45,8 @@ def main(argv=None):
             if shutdown.stopping.is_set():
                 raise RuntimeError("El proceso está cerrando.")
             return WideTechClient()
-        watches = WatchManager(source_factory, messenger, config, watch_config)
+        collector = start_collector()
+        watches = WatchManager(source_factory, messenger, config, watch_config, collector=collector)
         service = MessageService(config, messenger, watches, source_factory, watch_config)
         inbox = Inbox(service.handle)
         app = create_app(config, inbox)
@@ -70,7 +72,11 @@ def main(argv=None):
         try:
             shutdown.close(inbox, watches, server)
         finally:
-            shutdown.restore()
+            try:
+                if collector is not None:
+                    collector.close(timeout=2)
+            finally:
+                shutdown.restore()
 
 
 if __name__ == "__main__":

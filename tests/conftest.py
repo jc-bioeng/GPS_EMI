@@ -21,6 +21,9 @@ def offline(monkeypatch, caplog):
     monkeypatch.setattr(requests.sessions.Session, "request", forbidden)
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     monkeypatch.setattr(time, "sleep", forbidden)
+    # El servidor simulado nunca inicia persistencia local real.
+    monkeypatch.setattr('gps_emi.whatsapp.server.start_collector', lambda: None)
+    monkeypatch.setattr('gps_emi.analysis.collector.start_collector', lambda: None)
     monkeypatch.delenv("GPSPACE_COOKIE", raising=False)
     monkeypatch.delenv("GPSPACE_CONTENT_TYPE", raising=False)
     # Solo datos sintéticos; nunca heredar sesión/estado reales de la máquina.

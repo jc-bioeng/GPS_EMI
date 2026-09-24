@@ -33,7 +33,7 @@ def identifier_error(code, identifier):
 class WatchManager:
     """Adaptador WhatsApp; gestión y polling residen en monitoring."""
     def __init__(self, source_factory, messenger, config, watch_config=None, *,
-                 thread_factory=Thread, autostart=True):
+                 thread_factory=Thread, autostart=True, collector=None):
         self.messenger, self.config = messenger, config
         self.selections = None
         self.selection_handler = None
@@ -43,7 +43,7 @@ class WatchManager:
                                     on_created=self._created, on_error=self._error,
                                     on_selection=self._selection,
                                     on_terminal=lambda watch: self._reply(watch.notification_target, fmt.format_watch_failed(watch)),
-                                    thread_factory=thread_factory, autostart=autostart)
+                                    thread_factory=thread_factory, autostart=autostart, collector=collector)
 
     def _reply(self, target, text):
         try:

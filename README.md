@@ -944,5 +944,12 @@ requiere renovación manual. Este piloto local no implementa VPS ni HTTPS.
 ## Pendiente
 
 I4 definitivo e I5 (despliegue permanente) no están implementados. No se incluyen
-VPS, systemd, base de datos, Redis/Celery, panel web,
+VPS, systemd, persistencia de vigilancias, Redis/Celery, panel web,
 login/renovación automática de GPSpace ni geocercas propias.
+
+## Captura histórica GPS
+
+El servidor incorpora un collector pasivo SQLite que aprovecha los snapshots de
+flota de las vigilancias, sin consultas GPS adicionales ni cambios en llegadas.
+Configuración, esquema, límites, volumen Docker y exportación se describen en
+[Captura GPS pasiva](docs/gps-collector.md).

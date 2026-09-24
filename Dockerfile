@@ -12,7 +12,8 @@ WORKDIR /app
 COPY requirements-runtime.txt ./
 RUN python -m pip install --no-cache-dir -r requirements-runtime.txt \
     && groupadd --gid 10001 gps-emi \
-    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /app --shell /usr/sbin/nologin gps-emi
+    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /app --shell /usr/sbin/nologin gps-emi \
+    && mkdir /data && chown 10001:10001 /data && chmod 700 /data
 COPY --from=builder /wheels/ /tmp/wheels/
 RUN python -m pip install --no-cache-dir --no-deps /tmp/wheels/*.whl \
     && rm -rf /tmp/wheels
