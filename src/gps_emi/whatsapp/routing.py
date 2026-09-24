@@ -12,6 +12,7 @@ class State(str, Enum):
     WAITING_LOCATION_IDENTIFIER = "WAITING_LOCATION_IDENTIFIER"
     WAITING_SITE = "WAITING_SITE"
     WAITING_CANCEL = "WAITING_CANCEL"
+    WATCH_MENU = "WATCH_MENU"
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,10 @@ class Conversation:
         state = self.states.get(sender, State.IDLE)
         if command is None:
             stripped = text.strip()
-            if state == State.WAITING_CANCEL:
+            if state == State.WATCH_MENU:
+                command = Command({'1': 'prompt_watch', '2': 'list_watches',
+                                   '3': 'prompt_cancel', '4': 'menu'}.get(stripped, 'watch_menu'))
+            elif state == State.WAITING_CANCEL:
                 command = Command("cancel", stripped)
             elif state == State.WAITING_SITE:
                 command = Command("site", SITES[stripped.upper()]) if stripped.upper() in SITES else Command("retry_site")
@@ -64,9 +68,11 @@ class Conversation:
                 action = "watch" if state == State.WAITING_WATCH_IDENTIFIER else "location"
                 command = Command(action, stripped) if stripped else Command("prompt_" + action)
             else:
-                action = {"1": "prompt_watch", "2": "prompt_location", "3": "prompt_site", "4": "help"}.get(stripped, "invalid")
+                action = {"1": "prompt_watch", "2": "prompt_location", "3": "prompt_site", "4": "help", "5": "watch_menu"}.get(stripped, "invalid")
                 command = Command(action)
         self.states.pop(sender, None)
+        if command.action == 'watch_menu':
+            self.states[sender] = State.WATCH_MENU
         prompts = {
             "prompt_watch": (State.WAITING_WATCH_IDENTIFIER, fmt.identifier_prompt(True)),
             "prompt_location": (State.WAITING_LOCATION_IDENTIFIER, fmt.identifier_prompt()),

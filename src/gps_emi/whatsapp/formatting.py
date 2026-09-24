@@ -1,4 +1,6 @@
 """Presentación WhatsApp de resultados I3, sin lógica GPS."""
+from html.parser import HTMLParser
+
 from gps_emi.formatting import format_age, format_speed, format_ignition
 from gps_emi.monitoring.observation import gps_fix_warning
 from gps_emi.sites import EMI_SITES
@@ -11,16 +13,17 @@ MENU = """🚑 GPS EMI — Biomédica
 2️⃣ Consultar ubicación
 3️⃣ Ver ambulancias en sede
 4️⃣ Ayuda
+5️⃣ Gestionar vigilancias
 
-También puedes escribir un comando directamente."""
+_Responde con el número de una opción. También puedes escribir un comando directamente._"""
 HELP = """ℹ️ GPS EMI — Ayuda
 
 1️⃣ Vigilar llegada
-Recibe una notificación cuando se detecte una llegada a EMI.
+_Recibe una notificación cuando se detecte una llegada a EMI._
 2️⃣ Consultar ubicación
-Consulta la última posición reportada por GPS.
+_Consulta la última posición reportada por GPS._
 3️⃣ Ver ambulancias en sede
-Consulta los móviles cuya última posición corresponde a Poblado o Taller.
+_Consulta los móviles cuya última posición corresponde a Poblado o Taller._
 
 Comandos rápidos:
 VIGILAR AMB-20
@@ -32,9 +35,17 @@ MISVIGILANCIAS
 DETENER
 MENU
 
-Puedes utilizar placa o número de móvil. MENU reinicia la conversación;
-no cancela una vigilancia activa. Para soporte, contacta al responsable de Biomédica."""
-SITE_PROMPT = "🏥 Ambulancias en sede\n\nSelecciona una sede:\n1️⃣ EMI Medellin_Poblado\n2️⃣ EMI_Medellin_Taller"
+_Puedes utilizar placa o número de móvil. MENU reinicia la conversación;
+no cancela una vigilancia activa. Para soporte, contacta al responsable de Biomédica._"""
+WATCH_MENU = """🚑 Vigilancias
+
+1. Nueva vigilancia
+2. Mis vigilancias
+3. Detener vigilancia
+4. Menú principal
+
+_Responde con el número de una opción._"""
+SITE_PROMPT = "🏥 Ambulancias en sede\n\n1. EMI Medellín - Poblado\n2. EMI Medellín - Taller\n\n_Responde con el número de una sede._"
 DENIED = "🔒 Este número no está autorizado para consultar información del sistema GPS EMI."
 GPS_ERROR = "⚠️ No fue posible consultar GPS EMI en este momento.\nEl acceso a GPSpace requiere atención del sistema."
 NO_WATCHES = "🚑 No tienes vigilancias activas."
@@ -53,11 +64,11 @@ def format_watch_started(watch):
         )
         return ("👀 Vigilancia iniciada\n\n"
                 + f"La última posición reportada de {watch_identity(watch)} corresponde a {location}."
-                + "\n\nLa vigilancia seguirá activa para detectar una próxima llegada después de observar una salida."
-                + "\nSi no necesitas esperar otra llegada, puedes detener esta vigilancia con la opción siguiente o escribir DETENER."
-                + "\nEscribe VIGILANCIAS para gestionar tus vigilancias.")
+                + "\n\n_La vigilancia seguirá activa para detectar una próxima llegada después de observar una salida._"
+                + "\n_Si no necesitas esperar otra llegada, puedes detener esta vigilancia con la lista siguiente o escribir DETENER._"
+                + "\n_Escribe VIGILANCIAS para gestionar tus vigilancias._")
     return ("👀 Vigilancia iniciada\n\n" + watch_identity(watch)
-            + "\n\nTe avisaré cuando llegue a una sede EMI.\nEscribe VIGILANCIAS para gestionar tus vigilancias.")
+            + "\n\n_Te avisaré cuando llegue a una sede EMI._\n_Escribe VIGILANCIAS para gestionar tus vigilancias._")
 
 
 def format_watch_duplicate(watch):
@@ -81,13 +92,51 @@ def format_watches(watches, cancelling=False):
     lines = [title, ""]
     for number, watch in enumerate(watches, 1):
         lines.append(f"{number}. {watch_identity(watch)}\n   Vigilando\n")
-    lines.append("Responde con el número de la vigilancia que deseas detener." if cancelling
-                 else "VIGILAR: nueva · DETENER: detener una · MENU: inicio")
+    lines.append("_Responde con el número de la vigilancia que deseas detener._" if cancelling
+                 else "_VIGILAR: nueva · DETENER: detener una · MENU: inicio_")
     return "\n".join(lines)
 
 
 def display(value):
     return str(value) if value is not None and str(value).strip() else "N/D"
+
+
+class _LocationText(HTMLParser):
+    """Extrae texto visible sin ejecutar ni conservar markup del proveedor."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.hidden = None
+
+    def handle_starttag(self, tag, attrs):
+        if self.hidden:
+            return
+        if tag in {"script", "style"}:
+            self.hidden = tag
+        elif tag in {"br", "p", "div", "li"}:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if self.hidden:
+            if tag == self.hidden:
+                self.hidden = None
+        elif tag in {"p", "div", "li"}:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.hidden:
+            self.parts.append(data)
+
+
+def display_location(value):
+    """Limpia únicamente la presentación; Vehicle.location conserva el original."""
+    if value is None:
+        return "N/D"
+    parser = _LocationText()
+    parser.feed(str(value))
+    parser.close()
+    return display("".join(parser.parts).strip())
 
 
 def identifier_prompt(watch=False):
@@ -111,13 +160,13 @@ def freshness(result):
 
 def format_location(result):
     vehicle = result.vehicle
-    lines = ["📍 Última posición reportada", "", identity(vehicle), "", display(vehicle.location), "",
+    lines = ["📍 Última posición reportada", "", identity(vehicle), "", display_location(vehicle.location), "",
              f"Hora GPS: {display(vehicle.gps_timestamp)}", freshness(result),
              f"🚗 {format_speed(result)}", f"🔑 Ignición: {format_ignition(vehicle.ignition)}",
              f"📡 GPSFix: {display(vehicle.gps_fix)}"]
     if gps_fix_warning(vehicle.gps_fix):
         lines.append("⚠️ GPSFix=0: advertencia diagnóstica; posición conservada.")
-    lines.append("\nEsta es la última posición reportada y no garantiza la ubicación física actual.")
+    lines.append("\n_Esta es la última posición reportada y no garantiza la ubicación física actual._")
     return "\n".join(lines)
 
 

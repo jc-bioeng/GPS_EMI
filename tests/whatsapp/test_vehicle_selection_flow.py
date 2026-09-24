@@ -32,6 +32,45 @@ def send(service,text,sender=NUMBER):
     service.handle(IncomingMessage('id',sender,text,1000000))
 
 
+def test_numeric_selection_refreshes_vehicle_and_rejects_invalid_number(runtime):
+    service, _, source, messenger = runtime
+    send(service, 'UBICACION PRU332')
+    ctx = context(messenger)
+    before = source.get_vehicles.call_count
+    send(service, '99')
+    assert source.get_vehicles.call_count == before
+    assert 'número de la lista' in messenger.client.send_text.call_args.args[1]
+    send(service, '2')
+    assert source.get_vehicles.call_count == before + 1
+    assert ctx.candidates[1].mobile_number in messenger.client.send_text.call_args.args[1]
+    assert NUMBER not in service.vehicle_choices
+
+
+def test_numeric_selection_menu_invalidates_choices(runtime):
+    service, _, source, messenger = runtime
+    send(service, 'UBICACION PRU332')
+    send(service, 'MENU')
+    before = source.get_vehicles.call_count
+    send(service, '2')
+    assert source.get_vehicles.call_count == before
+    assert 'Escribe la placa' in messenger.client.send_text.call_args.args[1]
+
+
+def test_numeric_selection_pagination_and_expiration(runtime):
+    service, _, source, messenger = runtime
+    source.get_vehicles.return_value = [replace(candidates()[0], vehid=str(i), mobile_number=f'AMB-{i}') for i in range(12)]
+    send(service, 'UBICACION PRU332')
+    ctx = context(messenger)
+    send(service, '9')  # Ocho candidatos y Siguiente.
+    assert messenger.client.send_vehicle_selection.call_args.args[3] == 1
+    assert service.vehicle_choices[NUMBER][0].endswith(ctx.choice_ids[8])
+    service.selections.now = lambda: ctx.created_at + 301
+    before = source.get_vehicles.call_count
+    send(service, '1')
+    assert source.get_vehicles.call_count == before
+    assert 'expiró' in messenger.client.send_text.call_args.args[1]
+
+
 def context(messenger):
     return messenger.client.send_vehicle_selection.call_args.args[1]
 
@@ -212,7 +251,9 @@ def test_transport_contract_service_window_and_pagination(wa_config,messenger):
     messenger.vehicle_selection(NUMBER,ctx)
     payload = transport.call_args.kwargs['json']
     assert payload['to'] == NUMBER and payload['messaging_product'] == 'whatsapp'
-    assert payload['type'] == 'interactive' and payload['interactive'] == selection_payload(ctx)
+    assert payload['type'] == 'text'
+    assert '1. ' in payload['text']['body']
+    assert '_Responde con el número' in payload['text']['body']
 
 
 def test_unoffered_choice_rejected_then_valid_choice_works(runtime,wa_config):

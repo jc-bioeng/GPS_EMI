@@ -568,14 +568,15 @@ y `server.py`. Los tests están en `tests/whatsapp/`.
 
 ### Interfaz WhatsApp
 
-`MENU`, `MENÚ` e `INICIO` envían una lista nativa con el encabezado
-«🚑 GPS EMI — Biomédica», la pregunta «¿Qué deseas hacer?» y el botón
-«Ver opciones». Sus filas son Vigilar llegada, Consultar ubicación,
-Ver ambulancias en sede, Ayuda y Gestionar vigilancias. `menu.py` centraliza los IDs estables y el
-payload; las respuestas `button_reply` y `list_reply` se convierten a comandos
-del mismo flujo existente, sin depender del título visible. Los números 1–4
-y los comandos de texto siguen funcionando. Se utiliza lista porque los reply
-buttons admiten hasta tres opciones ([referencia de Meta](https://whatsapp.github.io/WhatsApp-Nodejs-SDK/api-reference/messages/interactive/)).
+`MENU`, `MENÚ` e `INICIO` envían texto con cinco opciones numeradas:
+Vigilar llegada, Consultar ubicación, Ver ambulancias en sede, Ayuda y
+Gestionar vigilancias. El usuario responde con un número; no se envían selectores
+nativos. Gestión, cancelación y selección entre vehículos también usan listas
+numeradas. En listas paginadas, Anterior/Siguiente tienen su propio número.
+Las explicaciones usan cursiva de WhatsApp (`_texto_`). Los comandos escritos
+siguen disponibles, y se conservan las respuestas de botones/listas antiguos
+por compatibilidad. La selección de vehículos mantiene caducidad, aislamiento
+por remitente y resolución por VEHID.
 
 Ubicación y sede envían un único «🔎 Consultando ...» desde el worker antes de
 consultar GPSpace, seguido del resultado o error. No hay nuevos hilos; si hay
@@ -740,10 +741,13 @@ otra vez al repetirse el webhook. El usuario puede enviar una nueva solicitud.
 2️⃣ Consultar ubicación
 3️⃣ Ver ambulancias en sede
 4️⃣ Ayuda
+5️⃣ Gestionar vigilancias
 ```
 
 1 pasa a `WAITING_WATCH_IDENTIFIER`; 2 a `WAITING_LOCATION_IDENTIFIER`; 3 a
-`WAITING_SITE`; 4 o `AYUDA` muestra ayuda. Solo la opción 3 pide Poblado/Taller.
+`WAITING_SITE`; 4 o `AYUDA` muestra ayuda; 5 abre la gestión de vigilancias
+(1 nueva, 2 mis vigilancias, 3 detener, 4 menú principal).
+Solo la opción 3 del menú principal pide Poblado/Taller.
 La siguiente entrada ejecuta el caso de uso correspondiente. Sede inválida conserva
 la espera; después de una operación se regresa a `IDLE`. Ante un identificador
 inexistente se informa sin escoger un vehículo. En WhatsApp, un identificador ambiguo

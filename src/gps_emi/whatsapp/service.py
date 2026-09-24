@@ -14,6 +14,8 @@ from .client import WhatsAppError
 from .config import normalize_number, WhatsAppConfigError
 from .notifier import WhatsAppNotifier
 from .routing import Conversation, State
+from .menu import interactive_command
+from .vehicle_selection import selection_payload
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,7 @@ class WatchManager:
         self.messenger, self.config = messenger, config
         self.selections = None
         self.selection_handler = None
+        self.cancel_handler = None
         self.manager = DomainWatchManager(self._notify, watch_config)
         self.polling = FleetPolling(source_factory, self.manager, config=watch_config,
                                     on_created=self._created, on_error=self._error,
@@ -55,6 +58,8 @@ class WatchManager:
         self._reply(watch.notification_target, text)
         if is_new and watch.monitor.actual_sites:
             try:
+                if self.cancel_handler is not None:
+                    self.cancel_handler(watch.notification_target, [watch])
                 self.messenger.cancel_menu(watch.notification_target, [watch])
             except WhatsAppError as error:
                 logger.warning('Opción de cancelación no enviada: %s.', error.category)
@@ -114,15 +119,27 @@ class MessageService:
         self.watch_config = watch_config or WatchConfig()
         self.conversation = Conversation()
         self.cancel_choices = {}
+        self.vehicle_choices = {}
         self.selections = PendingSelections(config=self.watch_config)
         self.watches.selections = self.selections
         self.watches.selection_handler = self._watch_selection
+        self.watches.cancel_handler = self._set_cancel_choices
+
+    def _set_cancel_choices(self, sender, watches):
+        self.vehicle_choices.pop(sender, None)
+        self.cancel_choices[sender] = [watch.watch_id for watch in watches]
+        self.conversation.states[sender] = State.WAITING_CANCEL
+
+    def _show_selection(self, sender, context, page=0):
+        rows = selection_payload(context, self.watch_config, page)['action']['sections'][0]['rows']
+        self.messenger.vehicle_selection(sender, context, self.watch_config, page)
+        self.vehicle_choices[sender] = [interactive_command(row['id']) for row in rows]
 
     def _offer_selection(self, sender, operation, identifier, candidates, target, generation):
         try:
             context = self.selections.offer(sender, operation, identifier, candidates, target, generation)
             if context is not None:
-                self.messenger.vehicle_selection(sender, context, self.watch_config)
+                self._show_selection(sender, context)
         except SelectionError:
             self._feedback(sender, 'Los registros son ambiguos y no se pueden distinguir de forma segura con los datos disponibles. No se seleccionó ninguna ambulancia.')
         except WhatsAppError as error:
@@ -157,7 +174,16 @@ class MessageService:
         if not self.messenger.windows.note(sender, message.timestamp):
             logger.warning("Mensaje fuera de ventana; no se ejecutan consultas ni texto libre.")
             return
-        command = self.conversation.route(sender, message.text)
+        text = message.text.strip()
+        choices = self.vehicle_choices.get(sender)
+        if choices and text.isascii() and text.isdigit():
+            if len(text) > 6 or not 1 <= int(text) <= len(choices):
+                self._feedback(sender, '_Responde con un número de la lista o escribe MENU._')
+                return
+            text = choices[int(text) - 1]
+        command = self.conversation.route(sender, text)
+        if command.action != 'vehicle_page':
+            self.vehicle_choices.pop(sender, None)
         generation = (self.selections.begin(sender)
                       if command.action not in ('vehicle_select', 'vehicle_page') else None)
         if command.action not in ('cancel', 'cancel_id'):
@@ -181,7 +207,7 @@ class MessageService:
                     page = int(choice)
                     if page >= (len(context.candidates) + 7) // 8:
                         raise SelectionError('invalid')
-                    self.messenger.vehicle_selection(sender, context, self.watch_config, page)
+                    self._show_selection(sender, context, page)
                     return
                 context, vehicle_id = self.selections.consume(sender, selection_id, choice)
                 if context.operation == SelectionOperation.LOCATION:
@@ -215,7 +241,7 @@ class MessageService:
                             self.messenger.cancel_menu(sender, watches)
                             return
                         except WhatsAppError:
-                            logger.warning('Selección nativa no enviada; se usa lista numerada.')
+                            logger.warning('Lista de cancelación no enviada; se reenvía como respuesta.')
                 else:
                     response = fmt.NO_WATCHES
             elif command.action == "cancel_id":

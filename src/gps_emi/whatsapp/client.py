@@ -3,8 +3,8 @@ import logging
 import requests
 
 from .config import normalize_number
-from .menu import menu_payload, cancel_menu_payload
 from .vehicle_selection import selection_payload
+from . import formatting as fmt
 
 logger = logging.getLogger(__name__)
 TEXT_LIMIT = 4096
@@ -69,16 +69,22 @@ class WhatsAppClient:
         return self._send(recipient, {"type": "text", "text": {"body": text, "preview_url": False}})
 
     def send_menu(self, recipient):
-        return self._send(recipient, {"type": "interactive", "interactive": menu_payload()})
+        return self.send_text(recipient, fmt.MENU)
 
     def send_watch_menu(self, recipient):
-        return self._send(recipient, {"type": "interactive", "interactive": menu_payload(watches=True)})
+        return self.send_text(recipient, fmt.WATCH_MENU)
 
     def send_cancel_menu(self, recipient, watches):
-        return self._send(recipient, {"type": "interactive", "interactive": cancel_menu_payload(watches)})
+        return self.send_text(recipient, fmt.format_watches(watches, cancelling=True))
 
     def send_vehicle_selection(self, recipient, context, config=None, page=0):
-        return self._send(recipient, {'type': 'interactive', 'interactive': selection_payload(context, config, page)})
+        payload = selection_payload(context, config, page)
+        rows = payload['action']['sections'][0]['rows']
+        lines = ['🚑 Seleccionar móvil', '', payload['body']['text'], '']
+        for number, row in enumerate(rows, 1):
+            lines.append(f"{number}. {row['title']}\n{row.get('description', '')}")
+        lines.append('\n_Responde con el número de una opción. MENU o CANCELAR cancela esta selección._')
+        return self.send_text(recipient, '\n'.join(lines))
 
     def send_template(self, recipient, name, language, parameters):
         if not name or not language or any(not isinstance(p, str) or not p for p in parameters):

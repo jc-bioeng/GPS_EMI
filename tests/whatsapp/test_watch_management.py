@@ -124,6 +124,16 @@ def test_initial_inside_cancel_option_failure_keeps_watch(runtime):
     assert 'escribir DETENER' in messenger.client.send_text.call_args.args[1]
 
 
+def test_initial_inside_accepts_numeric_cancellation(runtime):
+    service, watches, source, messenger = runtime
+    source.get_vehicles.return_value = [replace(source.get_vehicles.return_value[0], zones=[EMI_SITES[0]])]
+    send(service, 'VIGILAR AMB-20')
+    watches.polling.cycle()
+    send(service, '1')
+    assert not watches.list_active(NUMBER)
+    assert 'Vigilancia detenida' in messenger.client.send_text.call_args.args[1]
+
+
 def test_list_cancel_native_and_keep_other(runtime,wa_config):
     service,watches,_,messenger = runtime
     send(service,'VIGILAR AMB-20');send(service,'VIGILAR AMB-18')
@@ -195,10 +205,9 @@ def test_cancellation_payload_and_window(wa_config,messenger):
     transport.assert_not_called()
     messenger.windows.note(NUMBER,1000000)
     messenger.cancel_menu(NUMBER,[watch])
-    payload = transport.call_args.kwargs['json']['interactive']
-    assert payload['type'] == 'list'
-    assert payload['action']['sections'][0]['rows'] == [
-        {'id':'cancel_watch:'+watch.watch_id,'title':'MOVIL- 96','description':'Placa: PLATE'}]
+    payload = transport.call_args.kwargs['json']
+    assert payload['type'] == 'text'
+    assert '1. MOVIL- 96 · PLATE' in payload['text']['body']
     assert [r['id'] for r in menu_payload(watches=True)['action']['sections'][0]['rows']] == ['new_watch','my_watches','stop_watch','main_menu']
 
 

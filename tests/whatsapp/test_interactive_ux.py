@@ -16,6 +16,18 @@ from test_webhook import payload, post
 NUMBER = '15555550101'
 
 
+def test_numeric_watch_menu_has_context_and_returns_to_main_menu():
+    conversation = Conversation()
+    assert conversation.route(NUMBER, '5').action == 'watch_menu'
+    assert conversation.route(NUMBER, '9').action == 'watch_menu'
+    assert conversation.route(NUMBER, '2').action == 'list_watches'
+    assert conversation.route(NUMBER, 'VIGILANCIAS').action == 'watch_menu'
+    assert conversation.route(NUMBER, '3').action == 'prompt_cancel'
+    conversation.route(NUMBER, 'VIGILANCIAS')
+    assert conversation.route(NUMBER, '4').action == 'menu'
+    assert 'Escribe la placa' in conversation.route(NUMBER, '2').argument
+
+
 def interactive_payload(config, kind, selection, sender=NUMBER):
     data = payload(config, sender=sender)
     message = data['entry'][0]['changes'][0]['value']['messages'][0]
@@ -34,19 +46,11 @@ def test_menu_serialization_and_window(wa_config, messenger):
     messenger.windows.note(NUMBER, 1000000)
     messenger.menu(NUMBER)
     generated = transport.call_args.kwargs['json']
-    assert generated == {
-        'messaging_product': 'whatsapp', 'recipient_type': 'individual', 'to': NUMBER,
-        'type': 'interactive', 'interactive': {
-            'type': 'list', 'header': {'type': 'text', 'text': '🚑 GPS EMI — Biomédica'},
-            'body': {'text': '¿Qué deseas hacer?'},
-            'footer': {'text': 'También puedes escribir un comando directamente.'},
-            'action': {'button': 'Ver opciones', 'sections': [{'title': 'Opciones', 'rows': [
-                {'id': 'watch_arrival', 'title': 'Vigilar llegada'},
-                {'id': 'vehicle_location', 'title': 'Consultar ubicación'},
-                {'id': 'vehicles_at_site', 'title': 'Ver ambulancias en sede'},
-                {'id': 'help', 'title': 'Ayuda'},
-                {'id': 'manage_watches', 'title': 'Gestionar vigilancias'},
-            ]}]}}}
+    assert generated['type'] == 'text'
+    assert '5️⃣ Gestionar vigilancias' in generated['text']['body']
+    assert '_Responde con el número' in generated['text']['body']
+    assert 'interactive' not in generated
+
 
 
 @pytest.mark.parametrize('kind', ['button_reply', 'list_reply'])

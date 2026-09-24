@@ -4,7 +4,7 @@ from gps_emi.config import WatchConfig
 from gps_emi.monitoring import runner
 from gps_emi.queries import describe_vehicle
 from gps_emi.selection import SelectionError
-from .formatting import display, freshness
+from .formatting import display, display_location, freshness
 
 PAGE_SIZE = 8  # Reserva dos filas para navegación dentro del límite de diez.
 
@@ -16,7 +16,7 @@ def selection_payload(context, config=None, page=0):
     rows = []
     now = runner.local_now()
     for token, vehicle in zip(context.choice_ids, context.candidates):
-        description = f'{display(vehicle.plate)} · {freshness(describe_vehicle(vehicle, now, config or WatchConfig()))} · {display(vehicle.location)}'
+        description = f'{display(vehicle.plate)} · {freshness(describe_vehicle(vehicle, now, config or WatchConfig()))} · {display_location(vehicle.location)}'
         rows.append({'id': f'vehicle_select:{context.selection_id}:{token}',
                      'title': (vehicle.mobile_number or vehicle.plate or 'Registro')[:24],
                      'description': description.replace('\n', ' ')[:72]})
