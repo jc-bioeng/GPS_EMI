@@ -35,8 +35,7 @@ MISVIGILANCIAS
 DETENER
 MENU
 
-_Puedes utilizar placa o número de móvil. MENU reinicia la conversación;
-no cancela una vigilancia activa. Para soporte, contacta al responsable de Biomédica._"""
+_Puedes utilizar placa o número de móvil. MENU reinicia la conversación; no cancela una vigilancia activa. Para soporte, contacta al responsable de Biomédica._"""
 WATCH_MENU = """🚑 Vigilancias
 
 1. Nueva vigilancia
