@@ -104,13 +104,15 @@ class WatchRunner:
                             "%s: observación no procesada (VEHID=%s, GPS=%s).",
                             assessment.status.value, self.vehid, timestamp)
             return False
+        previous_state = self.monitor.state
         event = observe_resolved_vehicle(self.monitor, vehicle, expected_vehid=self.vehid)
         self.validator.last_processed_gps_timestamp = timestamp
         if self.destination is None:
             membership = "INSIDE_EMI" if self.monitor.actual_sites else "OUTSIDE_EMI"
         else:
             membership = "INSIDE" if self.destination in vehicle.zones else "OUTSIDE"
-        logger.info("%s | última posición reportada: %s | report_age=%.0f s | GPSFix=%s",
+        log = logger.info if previous_state != self.monitor.state else logger.debug
+        log("%s | última posición reportada: %s | report_age=%.0f s | GPSFix=%s",
                     membership, timestamp, age, vehicle.gps_fix)
         if event is None:
             return False

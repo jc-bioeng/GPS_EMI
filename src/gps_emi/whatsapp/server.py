@@ -2,6 +2,8 @@
 import argparse
 import logging
 import signal
+import time
+from importlib.metadata import version
 
 from dotenv import load_dotenv
 from waitress import create_server
@@ -10,6 +12,7 @@ from gps_emi.cli import configure_logging
 from gps_emi.config import WatchConfig
 from gps_emi.providers.widetech import WideTechClient
 from gps_emi.analysis.collector import start_collector
+from gps_emi.observability import SummaryReporter
 from .client import WhatsAppClient
 from .config import WhatsAppConfig, WhatsAppConfigError
 from .delivery import Messenger, ServiceWindow
@@ -30,15 +33,17 @@ def main(argv=None):
     parser.add_argument("--max-backoff", type=float, default=30)
     parser.add_argument("--stale-warning-seconds", type=float, default=300)
     args = parser.parse_args(argv)
-    configure_logging("INFO")
+    configure_logging(None)
+    started = time.monotonic()
     if not 1 <= args.port <= 65535:
         parser.error("Puerto fuera de rango.")
-    inbox = watches = server = collector = None
+    inbox = watches = server = collector = reporter = None
     shutdown = Shutdown()
     try:
         shutdown.install()
         watch_config = WatchConfig(args.interval, args.initial_backoff, args.max_backoff, args.stale_warning_seconds)
         load_dotenv(dotenv_path=".env", override=False)
+        configure_logging(None)
         config = WhatsAppConfig.from_env()
         messenger = Messenger(WhatsAppClient(config), ServiceWindow())
         def source_factory():
@@ -47,12 +52,17 @@ def main(argv=None):
             return WideTechClient()
         collector = start_collector()
         watches = WatchManager(source_factory, messenger, config, watch_config, collector=collector)
+        if collector is not None:
+            watches.polling.start()
         service = MessageService(config, messenger, watches, source_factory, watch_config)
         inbox = Inbox(service.handle)
         app = create_app(config, inbox)
         server = create_server(app, host=args.host, port=args.port, threads=4,
                                max_request_body_size=MAX_BODY_BYTES, channel_timeout=30)
         inbox.start()
+        reporter = SummaryReporter(watches.manager.active_count)
+        reporter.start()
+        logger.info('service started version=%s polling_seconds=%s summary_seconds=%s', version('gps-emi'), args.interval, reporter.interval)
         logger.info("Piloto WhatsApp disponible en %s:%s/webhook; una sola instancia.", args.host, args.port)
         server.run()
         return 0
@@ -75,6 +85,9 @@ def main(argv=None):
             try:
                 if collector is not None:
                     collector.close(timeout=2)
+                if reporter is not None:
+                    reporter.close()
+                logger.info('service shutdown finished uptime_seconds=%.1f', time.monotonic()-started)
             finally:
                 shutdown.restore()
 

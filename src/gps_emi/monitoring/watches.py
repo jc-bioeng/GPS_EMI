@@ -71,7 +71,7 @@ class WatchManager:
                           vehicle.plate, self.now(), notification_target,
                           ArrivalMonitor(vehicle.display_identifier))
             self._watches[watch.watch_id] = watch
-            logger.info('Watch creada watch_id=%s.', watch.watch_id)
+            logger.info('Watch creada watch_id=%s VEHID=%s.', watch.watch_id, watch.vehicle_id)
             return deepcopy(watch), True
 
     def get_watch(self, owner_id, watch_id):
@@ -90,13 +90,17 @@ class WatchManager:
         with self._lock:
             return any(w.status == WatchStatus.ACTIVE for w in self._watches.values())
 
+    def active_count(self):
+        with self._lock:
+            return sum(w.status == WatchStatus.ACTIVE for w in self._watches.values())
+
     def cancel_watch(self, owner_id, watch_id):
         with self._lock:
             watch = self._watches.get(watch_id)
             if watch is None or watch.owner_id != owner_id or watch.status != WatchStatus.ACTIVE:
                 return None
             watch.status = WatchStatus.CANCELLED
-            logger.info('Watch cancelada watch_id=%s.', watch_id)
+            logger.info('Watch cancelada watch_id=%s VEHID=%s.', watch_id, watch.vehicle_id)
             return deepcopy(watch)
 
     def fail_active(self, code):
@@ -106,6 +110,7 @@ class WatchManager:
                 if watch.status == WatchStatus.ACTIVE:
                     watch.status, watch.failure_code = WatchStatus.FAILED, code
                     failed.append(deepcopy(watch))
+                    logger.error('Watch failed watch_id=%s VEHID=%s reason=%s', watch.watch_id, watch.vehicle_id, code)
             return failed
 
     def close(self):
@@ -154,16 +159,18 @@ class WatchManager:
                         codes.append(assessment.status.value)
                     for code in codes:
                         if code not in watch.diagnostics:
-                            logger.warning('Diagnóstico watch_id=%s código=%s.', watch.watch_id, code)
+                            log = logger.debug if code == 'DUPLICATE' else logger.warning
+                            log('Diagnóstico watch_id=%s código=%s.', watch.watch_id, code)
                             watch.diagnostics.add(code)
                     if assessment.status != ObservationStatus.NEW:
+                        logger.debug('watch observation ignored watch_id=%s reason=%s', watch.watch_id, assessment.status.value)
                         continue
                     previous = watch.monitor.state
                     event = observe_resolved_vehicle(watch.monitor, vehicle, watch.vehicle_id)
                     watch.validator.last_processed_gps_timestamp = vehicle.gps_timestamp
                     watch.mobile_number, watch.plate = vehicle.mobile_number, vehicle.plate
                     if previous != watch.monitor.state:
-                        logger.info('Watch watch_id=%s estado=%s.', watch.watch_id, watch.monitor.state.value)
+                        logger.info('Watch watch_id=%s VEHID=%s previous=%s estado=%s sites=%s.', watch.watch_id, watch.vehicle_id, previous.value, watch.monitor.state.value, watch.monitor.actual_sites)
                     if event is not None:
                         watch.event = deepcopy(event)
                         watch.status = WatchStatus.COMPLETED
@@ -174,6 +181,7 @@ class WatchManager:
                     watch.status, watch.failure_code = WatchStatus.FAILED, 'observation'
                     logger.error('Observación fallida watch_id=%s; otras vigilancias continúan.', watch.watch_id)
         for watch in deliveries:
+            logger.info('notification attempted watch_id=%s VEHID=%s', watch.watch_id, watch.vehicle_id)
             try:
                 accepted = self.notify(watch, watch.event)
                 outcome = 'accepted' if accepted is not False else 'failed'
@@ -182,4 +190,6 @@ class WatchManager:
                 logger.error('Notificación fallida watch_id=%s; sin reintento automático.', watch.watch_id)
             with self._lock:
                 self._watches[watch.watch_id].notification_status = outcome
+            logger.log(logging.INFO if outcome == 'accepted' else logging.ERROR,
+                       'notification result watch_id=%s outcome=%s', watch.watch_id, outcome)
         return deliveries

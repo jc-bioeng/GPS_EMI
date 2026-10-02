@@ -96,6 +96,7 @@ def create_app(config, inbox):
 
     @app.post("/webhook")
     def receive():
+        logger.debug('webhook received')
         body = request.get_data()
         if not valid_signature(body, request.headers.get("X-Hub-Signature-256"), config.app_secret):
             logger.warning("Webhook rechazado por firma ausente o inválida.")

@@ -52,7 +52,7 @@ class ObservationStore:
         connection = sqlite3.connect(self.path, timeout=0.25)
         try:
             version = connection.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise ValueError('Versión de esquema no soportada.')
             connection.execute('''CREATE TABLE IF NOT EXISTS gps_observations (
                 id INTEGER PRIMARY KEY, acquired_at TEXT NOT NULL,
@@ -63,7 +63,8 @@ class ObservationStore:
                 reported_location TEXT, fingerprint TEXT NOT NULL)''')
             connection.execute('CREATE INDEX IF NOT EXISTS observations_vehicle ON gps_observations(vehicle_id, id DESC)')
             connection.execute('CREATE INDEX IF NOT EXISTS observations_acquired ON gps_observations(acquired_at)')
-            connection.execute('PRAGMA user_version=1')
+            if version == 0:
+                connection.execute('PRAGMA user_version=1')
             connection.commit()
             return connection
         except Exception:
@@ -154,9 +155,11 @@ class PassiveCollector:
 
 def start_collector():
     try:
-        collector = PassiveCollector(ObservationStore(
+        from .sessions import SessionCollector, SessionStore
+        collector = SessionCollector(SessionStore(
             os.environ.get('GPS_EMI_DATA_DB', DEFAULT_DB),
-            float(os.environ.get('GPS_EMI_DATA_HEARTBEAT_SECONDS', '300'))))
+            float(os.environ.get('GPS_EMI_COLLECTION_HEARTBEAT_SECONDS',
+                                 os.environ.get('GPS_EMI_DATA_HEARTBEAT_SECONDS', '300')))))
         collector.start()
         return collector
     except Exception:

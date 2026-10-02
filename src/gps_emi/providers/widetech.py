@@ -5,11 +5,14 @@ El endpoint es interno/no documentado y puede cambiar.
 """
 import os
 import re
+import logging
+import time
 from datetime import datetime
 from html.parser import HTMLParser
 import requests
 
 from gps_emi.models import Vehicle, normalize_plate
+from gps_emi.observability import metrics
 from gps_emi.providers.load_data_log import WideTechSessionInfo, LoadDataLogState, generate_parameters
 from gps_emi.errors import (
     AcquisitionError, TransientAcquisitionError, SessionExpiredError,
@@ -86,6 +89,26 @@ class WideTechClient:
         return payload
 
     def get_vehicles(self) -> list[Vehicle]:
+        logger = logging.getLogger('gps_emi.provider')
+        started = time.monotonic()
+        logger.debug('acquisition started')
+        try:
+            vehicles = self._get_vehicles()
+        except Exception as error:
+            status = ('SESSION_EXPIRED' if isinstance(error, SessionExpiredError) else
+                      'EMPTY_RESPONSE' if isinstance(error, EmptyResponseError) else
+                      'MALFORMED_RESPONSE' if isinstance(error, InvalidResponseError) else
+                      'HTTP_TRANSIENT' if isinstance(error, TransientHTTPError) else
+                      'NETWORK_ERROR' if isinstance(error, TransientAcquisitionError) else
+                      'MISSING_CREDENTIALS' if isinstance(error, MissingCredentialsError) else 'PROVIDER_ERROR')
+            metrics.provider(status)
+            logger.debug('acquisition failed status=%s duration_ms=%.1f', status, (time.monotonic()-started)*1000)
+            raise
+        metrics.provider('PROVIDER_OK', len(vehicles))
+        logger.debug('acquisition completed records=%s vehicles=%s duration_ms=%.1f', self.records_received, len(vehicles), (time.monotonic()-started)*1000)
+        return vehicles
+
+    def _get_vehicles(self) -> list[Vehicle]:
         payload = self.load_data_log()
         if not payload.strip():
             raise EmptyResponseError()
@@ -103,6 +126,7 @@ class WideTechClient:
         failed = False
         try:
             rows = parse(payload)
+            self.records_received = len(rows)
             vehicles = [normalize_vehicle(row) for row in rows
                         if row.get("fltName") == TARGET_FLEET]
         except (ValueError, TypeError, OverflowError):

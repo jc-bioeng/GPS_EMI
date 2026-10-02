@@ -21,3 +21,7 @@
 **/build
 **/dist
 **/*.egg-info
+**/*.db*
+**/*.sqlite*
+**/*.csv
+**/*.log

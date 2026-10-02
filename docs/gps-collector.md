@@ -38,7 +38,12 @@ inventados. Correspondencia **observada en EMI/GPSpace**, no garantía universal
 Valores opcionales ausentes se guardan como SQL NULL, salvo ignition/gps_fix,
 que usan JSON `null`, y zones, que usa JSON `[]`. Coordenadas sin afinidad SQLite
 preservan incluso un valor textual que el parser no pudiera convertir. El esquema
-es versión 1 (`PRAGMA user_version`), con índices por VEHID/id y acquired_at.
+es versión 2 (`PRAGMA user_version`), con índices por sesión/VEHID y acquired_at.
+La migración desde v1 agrega `collection_session_id` nullable sin borrar filas:
+los datos históricos quedan sin sesión, disponibles mediante el exportador antiguo.
+La tabla `collection_sessions` guarda id, started_at, planned_end_at, stopped_at,
+status, requested_duration_seconds, created_at y stop_reason. Un índice único
+permite una sola sesión COLLECTING. No persiste usuarios ni destinos WhatsApp.
 Una versión desconocida se rechaza sin reescribirla.
 
 "Crudo" significa campos disponibles después del parser actual: no es una copia
@@ -50,16 +55,22 @@ es aware y se serializa en UTC independientemente del timezone del host.
 
 ## Frecuencia y permanencia
 
-El polling predeterminado es 30 segundos y **solo funciona mientras existen
-vigilancias o solicitudes pendientes**. Un servidor encendido 24/7 no garantiza
-un dataset continuo: no se inicia polling para recolectar. Las consultas puntuales
-de ubicación/sede tampoco alimentan este collector. No hay adquisición adicional.
+El polling predeterminado es 30 segundos. El mismo coordinador se activa mientras
+hay vigilancias, solicitudes pendientes **o una sesión de recolección activa**.
+El collector no tiene un temporizador de consultas GPS propio. Una adquisición
+por ciclo sirve a watches y colección simultáneamente. El CLI de sesiones solo
+modifica SQLite: requiere el servidor ejecutándose para adquirir snapshots.
+Las consultas puntuales de ubicación/sede siguen siendo independientes del polling,
+como antes, y no alimentan este collector ni se convierten en una caché operacional.
 
 Se compara con la última observación almacenada del mismo VEHID. Cualquier cambio
 en un campo conservado produce otra fila (incluye timestamp, posición, ignición,
 velocidad sin umbral, GPSFix, nombres, Zones original/normalizada y dirección).
 Una observación idéntica produce una fila cada 300 segundos de adquisición por
-defecto. `GPS_EMI_DATA_HEARTBEAT_SECONDS` permite ajustar ese intervalo positivo.
+defecto. `GPS_EMI_COLLECTION_HEARTBEAT_SECONDS` ajusta ese intervalo positivo;
+`GPS_EMI_DATA_HEARTBEAT_SECONDS` se conserva como alias si la nueva variable no existe.
+La comparación está aislada por sesión y VEHID; la primera muestra de cada campaña
+se conserva aunque coincida con datos de una anterior.
 Sin VEHID no se deduplica ni se inventa identidad por placa. Una vuelta atrás
 del reloj de adquisición se conserva, no se descarta.
 
@@ -77,14 +88,20 @@ No se carga .env en el módulo collector ni en la utilidad de exportación.
 
 Cada lote abre conexión, usa una transacción atómica y cierra la conexión en su
 propio thread; no se comparten conexiones SQLite. Timeout de bloqueo: 250 ms.
-SQLite utiliza su journal transaccional habitual. No se modifica `/health`:
+SQLite usa WAL, transacciones IMMEDIATE y conexiones por operación/thread/proceso.
+Start/stop/status pueden ejecutarse desde otro proceso sobre el mismo volumen.
+No se modifica `/health`:
 sigue siendo liveness `{"status":"ok"}` sin consultar SQLite.
 
 Errores de inicialización/escritura se registran sin filas, excepciones internas,
 credenciales ni rutas; se reintenta con el siguiente snapshot. Un lote fallido se
 pierde; no hay reintentos que bloqueen las vigilancias. Si la cola se llena, se
 descarta el nuevo snapshot y se registra el aviso. No existe borrado automático.
-El cierre detiene primero el polling y después permite hasta dos segundos para
+Un thread secundario verifica el estado persistido aproximadamente cada segundo,
+sin consultar GPS; el coordinador detecta activación en hasta unos dos segundos
+estando inactivo (o al finalizar un ciclo/backoff). Cada escritura vuelve a validar
+la sesión y la ventana de adquisición en transacción. El cierre detiene primero
+el polling y después permite hasta dos segundos para
 drenar la cola; un cierre forzado puede perder lo pendiente en memoria, mientras
 las transacciones ya confirmadas permanecen. No existe garantía de captura sin
 pérdidas ni de latencia cero de la copia en memoria.
@@ -115,8 +132,8 @@ CSV UTF-8 con encabezados, campos JSON preservados y sin fingerprint interno.
 La conexión es `mode=ro`; no crea una base inexistente ni modifica registros.
 El archivo destino debe ser nuevo. `--from` inclusivo y `--to` exclusivo filtran
 **acquired_at**, requieren offset/Z y se convierten a UTC. No filtran por fecha
-GPS ni criterios analíticos. Un export largo puede bloquear brevemente al escritor
-con el journal actual; sus lotes fallidos se notifican y descartan.
+GPS ni criterios analíticos. Con WAL, un export largo puede retrasar el checkpoint
+y aumentar el tamaño del WAL; los errores de escritura se notifican y aíslan.
 
 Tratar direcciones y nombres como texto no confiable: el CSV conserva valores
 originales, incluidos posibles prefijos de fórmulas. Importar las columnas como
@@ -146,7 +163,7 @@ heartbeat 300 s y **1–2 KB por fila incluyendo índices**:
 
 Unidades decimales; multiplicar por N/100 para otra flota y por la fracción de
 tiempo de polling efectivo. Direcciones/markup extensos, duplicados sin VEHID,
-journals y exportaciones pueden elevar el tamaño. Medir después de una campaña
+journals WAL y exportaciones pueden elevar el tamaño. Medir después de una campaña
 piloto; no se establece retención automática ni se presenta esta estimación como
 límite garantizado.
 

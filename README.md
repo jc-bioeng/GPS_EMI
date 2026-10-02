@@ -950,6 +950,9 @@ login/renovación automática de GPSpace ni geocercas propias.
 ## Captura histórica GPS
 
 El servidor incorpora un collector pasivo SQLite que aprovecha los snapshots de
-flota de las vigilancias, sin consultas GPS adicionales ni cambios en llegadas.
+flota del coordinador, sin consultas duplicadas ni cambios en llegadas. La captura
+requiere una sesión explícita (`python -m gps_emi.collector start --duration 24h`);
+esa sesión mantiene activo el mismo polling aunque no haya watches.
 Configuración, esquema, límites, volumen Docker y exportación se describen en
-[Captura GPS pasiva](docs/gps-collector.md).
+[Captura GPS pasiva](docs/gps-collector.md) y
+[Sesiones y observabilidad](docs/collection-sessions.md).

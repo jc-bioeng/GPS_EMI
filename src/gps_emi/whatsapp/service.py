@@ -79,6 +79,7 @@ class WatchManager:
         return notifier.accepted
 
     def start(self, sender, identifier):
+        logger.info('watch requested')
         context_id = self.selections.current(sender) if self.selections is not None else None
         return self.polling.request_watch(sender, identifier, sender, context_id=context_id)
 

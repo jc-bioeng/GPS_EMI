@@ -37,11 +37,24 @@ class FleetPolling:
         self.closed = False
         self.consecutive_failures = 0
         self.next_backoff = self.config.initial_backoff
+        self.blocked_collection = None
+
+    def collection_active(self):
+        session = getattr(self.collector, 'active_session', None)
+        if self.collector is None or getattr(self.collector, 'active', False) is not True:
+            return False
+        return bool(session and session['id'] != self.blocked_collection)
+
+    def start(self):
+        with self.condition:
+            if self.autostart and not self.closed and self.thread is None:
+                self.thread = self.thread_factory(target=self._run, name='gps-emi-fleet', daemon=True)
+                self.thread.start()
 
     @property
     def active(self):
         with self.condition:
-            return bool(self.pending) or self.manager.has_active()
+            return bool(self.pending) or self.manager.has_active() or self.collection_active()
 
     def request_watch(self, owner_id, identifier, notification_target, *, vehicle_id=None, context_id=None):
         if not identifier.strip():
@@ -76,7 +89,7 @@ class FleetPolling:
                 if self.closed or self.stop_event.is_set():
                     return None
                 requests = list(self.pending)
-                if not requests and not self.manager.has_active():
+                if not requests and not self.manager.has_active() and not self.collection_active():
                     return None
             try:
                 vehicles = list(self.source_factory().get_vehicles())
@@ -88,6 +101,8 @@ class FleetPolling:
                 logger.warning('Adquisición recuperable fallida; intento=%d espera=%g s.', self.consecutive_failures, delay)
                 return delay
             except Exception as error:
+                if self.collection_active():
+                    self.blocked_collection = (self.collector.active_session or {}).get('id')
                 code = 'acquisition' if isinstance(error, AcquisitionError) else 'internal'
                 with self.condition:
                     if self.closed or self.stop_event.is_set():
@@ -134,6 +149,8 @@ class FleetPolling:
             self.next_backoff = self.config.initial_backoff
             # La confirmación usa la primera observación ya evaluada, sin otra adquisición.
             self.manager.process_snapshot(vehicles)
+            from gps_emi.observability import metrics
+            metrics.update(active_watches=self.manager.active_count())
             # submit no hace I/O: el escritor SQLite queda fuera del camino operativo.
             if self.collector is not None:
                 try:
@@ -154,9 +171,11 @@ class FleetPolling:
         try:
             while not self.stop_event.is_set():
                 with self.condition:
-                    self.condition.wait_for(lambda: self.closed or self.stop_event.is_set() or self.active)
+                    self.condition.wait_for(lambda: self.closed or self.stop_event.is_set() or self.active, timeout=1)
                     if self.closed or self.stop_event.is_set():
                         break
+                    if not self.active:
+                        continue
                 delay = self.cycle()
                 if delay is not None and self.active and self.stop_event.wait(delay):
                     break

@@ -11,12 +11,12 @@ from .collector import DEFAULT_DB, EXPORT_COLUMNS, utc_text
 
 def timestamp(value):
     try:
-        return utc_text(datetime.fromisoformat(value))
+        return utc_text(datetime.fromisoformat(value.replace('Z', '+00:00')))
     except (ValueError, TypeError):
         raise argparse.ArgumentTypeError('Use fecha ISO 8601 con offset o Z.') from None
 
 
-def export_csv(db, output, start=None, end=None):
+def export_csv(db, output, start=None, end=None, *, session_id=None):
     db, output = Path(db).resolve(), Path(output).resolve()
     if db == output:
         raise ValueError('El destino debe ser distinto de la base.')
@@ -29,14 +29,23 @@ def export_csv(db, output, start=None, end=None):
             if value:
                 where.append('acquired_at ' + operator + ' ?')
                 params.append(value)
-        query = 'SELECT ' + ','.join(EXPORT_COLUMNS) + ' FROM gps_observations'
+        columns = EXPORT_COLUMNS
+        available = {row[1] for row in connection.execute('PRAGMA table_info(gps_observations)')}
+        if 'collection_session_id' in available:
+            columns = columns + ('collection_session_id',)
+        if session_id is not None:
+            if not connection.execute('SELECT 1 FROM collection_sessions WHERE id=?', (session_id,)).fetchone():
+                raise ValueError('Sesión inexistente.')
+            where.append('collection_session_id=?')
+            params.append(session_id)
+        query = 'SELECT ' + ','.join(columns) + ' FROM gps_observations'
         if where:
             query += ' WHERE ' + ' AND '.join(where)
         cursor = connection.execute(query + ' ORDER BY acquired_at, id', params)
         # No sobrescribir exportaciones existentes ni otros archivos locales.
         with output.open('x', encoding='utf-8', newline='') as stream:
             writer = csv.writer(stream)
-            writer.writerow(EXPORT_COLUMNS)
+            writer.writerow(columns)
             count = 0
             for row in cursor:
                 writer.writerow(row)

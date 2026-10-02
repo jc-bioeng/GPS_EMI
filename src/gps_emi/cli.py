@@ -1,12 +1,11 @@
 import argparse
 import logging
 import math
-import sys
 
 from dotenv import load_dotenv
 
 from gps_emi.config import WatchConfig
-from gps_emi.clock import OperationalFormatter
+from gps_emi.observability import configure_logging
 from gps_emi.monitoring.arrival import DESTINATIONS
 from gps_emi.monitoring.runner import watch_arrival
 from gps_emi.errors import TransientAcquisitionError
@@ -17,21 +16,7 @@ from gps_emi.providers.widetech import WideTechClient, WideTechError
 from gps_emi.queries import get_vehicle_location, list_vehicles_at_site
 from gps_emi.resolution import VehicleResolutionError
 
-logger = logging.getLogger(__name__)
-
-
-def configure_logging(level):
-    app_logger = logging.getLogger("gps_emi")
-    app_logger.setLevel(level)
-    app_logger.propagate = False
-    for handler in list(app_logger.handlers):
-        if getattr(handler, "gps_emi_console", False):
-            app_logger.removeHandler(handler)
-            handler.close()
-    handler = logging.StreamHandler(sys.stdout)
-    handler.gps_emi_console = True
-    handler.setFormatter(OperationalFormatter("[%(asctime)s] %(levelname)s: %(message)s"))
-    app_logger.addHandler(handler)
+logger = logging.getLogger('gps_emi.cli')
 
 
 def positive_interval(value):
@@ -72,6 +57,7 @@ def _execute(action, args, config) -> int:
         site = args.site if args.site is not None else _select_site()
     # Igual carga local que I1/I2, únicamente al ejecutar una operación.
     load_dotenv(dotenv_path=".env", override=False)
+    configure_logging(args.log_level)
     client = WideTechClient()
     if action == "watch":
         if args.destination is not None:
@@ -104,7 +90,7 @@ def main(argv=None) -> int:
                         help="Espera máxima tras fallos consecutivos (segundos: 30)")
     parser.add_argument("--stale-warning-seconds", type=float, default=300.0,
                         help="Advertir STALE si report_age supera este umbral (300)")
-    parser.add_argument("--log-level", choices=("DEBUG", "INFO", "WARNING", "ERROR"), default="INFO")
+    parser.add_argument("--log-level", choices=("DEBUG", "INFO", "WARNING", "ERROR"), default=None)
     args = parser.parse_args(argv)
     action = args.action or ("site" if args.site is not None else "watch")
     if args.destination is not None and action != "watch":
