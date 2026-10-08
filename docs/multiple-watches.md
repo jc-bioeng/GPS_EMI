@@ -57,8 +57,9 @@ WatchRunner existente; no participa en el polling compartido del servidor.
 `FleetPolling` mantiene altas pendientes hasta tener una adquisición exitosa.
 Una petición recibida durante HTTP espera el siguiente snapshot. No hay consulta
 de preflight ni un runner por Watch: el mismo resultado resuelve todas las altas
-del ciclo y se indexa por VEHID para las activas. Sin altas ni Watches activas,
-el hilo duerme en una Condition y no consulta GPSpace.
+del ciclo y se indexa por VEHID para las activas. Sin altas, Watches activas ni
+sesión de recolección activa, el hilo espera y no consulta GPSpace. Una sesión
+de recolección también puede mantener el polling, aun sin vigilancias.
 
 Timeouts/conexión/HTTP recuperables conservan Watches y altas pendientes, con el
 backoff exponencial acotado de WatchConfig; recuperación restablece el intervalo.
@@ -75,7 +76,8 @@ mantienen sus reglas exactas: primera lectura dentro no es llegada, y pasar de
 sede a sede sin observar exterior tampoco lo es.
 
 Las consultas puntuales de ubicación/inventario conservan su adquisición propia.
-La garantía de un snapshot por ciclo corresponde al conjunto de vigilancias.
+La garantía de un snapshot por ciclo corresponde a las vigilancias y al collector
+del mismo coordinador. No hay un límite global entre consultas, CLI y procesos.
 
 ## Concurrencia y notificación
 
@@ -115,12 +117,12 @@ El ID antiguo «Vigilar llegada», la opción 1 y VIGILAR conservan el prompt de
 MENU añade «Gestionar vigilancias»; VIGILANCIAS abre esa misma sección con:
 Nueva vigilancia / Mis vigilancias / Detener vigilancia / Menú.
 MISVIGILANCIAS lista solo las activas del propietario, sin IDs técnicos.
-DETENER ofrece una lista nativa hasta diez Watches; con más, una lista numerada
-completa. El índice se liga a watch_id al mostrar la lista, nunca al orden de
-una lista recalculada al cancelar. Una selección vieja no puede cancelar otra Watch.
-Los títulos nativos se ajustan a los límites de Meta; el listado textual mantiene
-el móvil/placa completos. Las respuestas interactivas usan IDs y pasan por la misma
-firma, allowlist, deduplicación, ventana de atención y Conversation.
+DETENER ofrece una lista textual numerada. El índice se liga a watch_id al mostrar
+la lista, nunca al orden de una lista recalculada al cancelar. El número responde
+a la oferta vigente: no permite distinguir si el usuario estaba mirando un
+mensaje anterior. Se conservan móvil/placa y las comprobaciones de propietario.
+Los antiguos IDs interactivos siguen aceptándose por compatibilidad; no se envían
+nuevos selectores nativos. Firma, allowlist, deduplicación y ventana se mantienen.
 
 Ejemplo de alta:
 
@@ -164,7 +166,9 @@ por propietario, resiliencia, cierre y fallos de entrega. Todas son offline.
 
 **Las vigilancias activas se pierden al reiniciar el proceso.**
 Almacenamiento e historial in-memory, sin límite/retención persistente; un solo
-proceso; multiusuario real todavía no implementado; persistencia futura pendiente.
+proceso; persistencia futura pendiente. Se admiten propietarios autorizados
+distintos con aislamiento de sus vigilancias, sin administración persistente de
+usuarios ni roles.
 No hay coordinación con otra instancia o con una vigilancia de consola aparte.
 La cola de altas pendientes y el historial consumen memoria durante la sesión.
 Quedan pendientes reintentos durables, seguimiento de entrega y recuperación de

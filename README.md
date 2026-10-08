@@ -1,5 +1,20 @@
 # GPS EMI — I1, I2, I3 y piloto WhatsApp I4-P
 
+## Estado y documentación vigente — 8 de octubre de 2026
+
+Base operacional: `03ee209`; fase 1 oficial confirmada en `eda2606`.
+La base operacional incluye múltiples vigilancias WhatsApp, menús numéricos,
+sesiones SQLite de recolección y observabilidad. Sigue usando LoadDataLog.
+La fase 1 del adaptador oficial está versionada y **no está activada** en CLI,
+WhatsApp, vigilancias ni collector. Este repositorio no acredita
+por sí solo qué imagen está ejecutándose en una máquina o VPS.
+
+Empezar por el [índice de documentación](docs/README.md), la
+[guía del sistema](docs/guia-del-sistema.md) y el
+[manual de operación](docs/operacion.md). Allí se separan estado confirmado,
+trabajo local y pendientes para oficializar los servicios. Los apartados I1–I4
+inferiores conservan el detalle de los incrementos y sus validaciones históricas.
+
 Consola para vigilar la llegada a EMI de **una ambulancia**, consultar su última
 ubicación por **placa o número de móvil**, o listar ambulancias por sede.
 Utiliza la pertenencia a geocercas reportada por WideTech en `Zones`: no calcula
@@ -937,8 +952,11 @@ docker compose down
 El puerto se publica solo en `localhost:8000` (127.0.0.1). `/health` es liveness
 local y devuelve `{"status":"ok"}` sin consultar GPSpace ni Meta. Los logs salen
 por stdout/stderr. El cierre dispone de 15 segundos de gracia para el presupuesto
-interno de seis segundos. No hay volúmenes: reiniciar el contenedor pierde las
-watches activas y el estado conversacional temporal. La sesión de GPSpace todavía
+interno de seis segundos del servicio, más hasta dos segundos para el collector.
+El volumen nombrado `gps-observations` se monta en `/data` y conserva SQLite y las
+sesiones de recolección. Reiniciar pierde las watches activas y el estado
+conversacional temporal, que continúan en memoria. Los logs usan rotación
+json-file de 10 MB por archivo, máximo tres. La sesión de GPSpace todavía
 requiere renovación manual. Este piloto local no implementa VPS ni HTTPS.
 
 ## Pendiente
