@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<DataTable xmlns="http://shareservice.co/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <xs:schema id="NewDataSet" xmlns="" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xs:element name="NewDataSet" msdata:IsDataSet="true" msdata:MainDataTable="Table" msdata:UseCurrentLocale="true">
+      <xs:complexType><xs:choice minOccurs="0" maxOccurs="unbounded"><xs:element name="Table"><xs:complexType><xs:sequence>
+        <xs:element name="Id" type="xs:int" minOccurs="0" />
+        <xs:element name="Movil" type="xs:string" minOccurs="0" />
+        <xs:element name="FechaGPS" type="xs:dateTime" minOccurs="0" />
+        <xs:element name="FechaServidor" type="xs:dateTime" minOccurs="0" />
+        <xs:element name="Localizacion" type="xs:string" minOccurs="0" />
+        <xs:element name="Velocidad" type="xs:double" minOccurs="0" />
+        <xs:element name="Rumbo" type="xs:string" minOccurs="0" />
+        <xs:element name="MSGID" type="xs:int" minOccurs="0" />
+        <xs:element name="Mensaje" type="xs:string" minOccurs="0" />
+        <xs:element name="Latitude" type="xs:double" minOccurs="0" />
+        <xs:element name="Longitude" type="xs:double" minOccurs="0" />
+        <xs:element name="Altitud" type="xs:double" minOccurs="0" />
+        <xs:element name="VEH_NAM" type="xs:string" minOccurs="0" />
+        <xs:element name="Zones" type="xs:string" minOccurs="0" />
+        <xs:element name="StateIgnition" type="xs:int" minOccurs="0" />
+        <xs:element name="GPSFix" type="xs:string" minOccurs="0" />
+        <xs:element name="fltName" type="xs:string" minOccurs="0" />
+        <xs:element name="VEH_DESC" type="xs:string" minOccurs="0" />
+        <xs:element name="mtlCelularID" type="xs:string" minOccurs="0" />
+        <xs:element name="StatusForm" type="xs:string" minOccurs="0" />
+        <xs:element name="VEH_ID" type="xs:int" minOccurs="0" />
+      </xs:sequence></xs:complexType></xs:element></xs:choice></xs:complexType>
+    </xs:element>
+  </xs:schema>
+  <diffgr:diffgram xmlns:diffgr="urn:schemas-microsoft-com:xml-diffgram-v1" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <NewDataSet xmlns="">
+      <Table diffgr:id="Table1" msdata:rowOrder="0">
+        <Id>90001</Id><Movil>SYNTHETIC-MOBILE-A</Movil>
+        <FechaGPS>2026-01-02T03:04:05.123</FechaGPS>
+        <FechaServidor>2026-01-02T03:05:06</FechaServidor>
+        <Localizacion>Ubicación sintética, sin uso operacional</Localizacion>
+        <Velocidad>12.5</Velocidad><Rumbo>N</Rumbo><MSGID>7</MSGID><Mensaje>Prueba sintética</Mensaje>
+        <Latitude>0.125</Latitude><Longitude>0.25</Longitude><Altitud>1</Altitud>
+        <VEH_NAM>SYNTHETIC-LABEL-A</VEH_NAM><Zones>{&lt;b&gt;Zona sintética&lt;/b&gt;}</Zones>
+        <StateIgnition>0</StateIgnition><GPSFix>provider-value</GPSFix><fltName>Ambulancias Medellín</fltName>
+        <VEH_DESC>CAMIONETA</VEH_DESC><mtlCelularID>OMIT-SYNTHETIC-CELL</mtlCelularID><StatusForm />
+        <VEH_ID>10001</VEH_ID>
+      </Table>
+    </NewDataSet>
+  </diffgr:diffgram>
+</DataTable>

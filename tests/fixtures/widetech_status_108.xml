@@ -1,0 +1,8 @@
+<space>
+  <Response>
+    <Status>
+      <code>108</code>
+      <description>El usuario No tiene permisos para esta funcionalidad.</description>
+    </Status>
+  </Response>
+</space>

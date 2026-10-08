@@ -1,0 +1,8 @@
+<space>
+  <Response>
+    <Status>
+      <code>109</code>
+      <description>Restricción de frecuencia: fixture sintética, no observada en RenderExcel.</description>
+    </Status>
+  </Response>
+</space>
