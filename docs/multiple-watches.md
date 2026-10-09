@@ -11,7 +11,7 @@ Webhook firmado → Inbox → MessageService → solicitudes de alta
                                                │
                        Coordinator (único planificador HTTP)
                                                │
-                       SnapshotSource → FleetPolling
+                       Catálogo persistido → SnapshotSource → FleetPolling
                        distribución de cada publicación
                              │                 │
                       resolver altas       WatchManager
@@ -85,6 +85,17 @@ planificador propio. El estado anterior conservado por calidad no se entrega
 como observación nueva a vigilancias/collector. HostLease impone exclusión local
 entre CLI y servidor con el mismo GPS_EMI_STATE_DIR. No coordina otros hosts.
 No hay IPC; véase [fase 2](widetech-official-phase2-spec.md).
+
+Fase 3 separa políticas de consumo: consultas nacionales; nuevas vigilancias y
+collector exclusivamente Medellín. Las identidades se reconcilian aunque el GPS
+sea repetido/defectuoso. Renombrar conserva VEH_ID y vigilancia. Flota distinta
+confirmada termina la activa con FAILED/fleet_changed, sin llegada y sin callback
+proactivo WhatsApp. Flota desconocida o identidad duplicada no la termina.
+La publicación solo ocurre después de persistir catálogo; un fallo SQLite conserva
+el snapshot anterior y no aplica reclasificación. El catálogo no añade un nuevo
+bloqueo de altas por ausencia ni incorpora candidatos persistidos al selector.
+WatchRunner recibe también publicaciones intermedias para no omitir una
+reclasificación entre lecturas. Detalles en [fase 3](widetech-official-phase3.md).
 
 ## Concurrencia y notificación
 

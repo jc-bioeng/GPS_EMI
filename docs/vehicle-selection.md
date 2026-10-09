@@ -14,7 +14,7 @@ calculados mediante el mismo evaluador de las consultas. Al mostrar otra página
 la antigüedad se vuelve a calcular sobre el timestamp original, sin consultar GPS.
 
 ```text
-WideTech → Vehicle → resolve_vehicle
+Coordinator → snapshot persistido → Vehicle → resolve_vehicle
                        ├─ NOT_FOUND → respuesta segura
                        ├─ RESOLVED  → operación normal
                        └─ AMBIGUOUS → PendingVehicleSelection
@@ -25,10 +25,17 @@ WideTech → Vehicle → resolve_vehicle
                                        │ VEHID exacto
                           ┌────────────┴────────────┐
                      LOCATION                CREATE_WATCH
-                  snapshot nuevo            siguiente ciclo común
+                  snapshot compartido            siguiente ciclo común
                   find_vehicle_by_id        find_vehicle_by_id
                   resultado exacto          Watch owner+VEHID+target
 ```
+
+En fase 3, LOCATION conserva el alcance nacional y CREATE_WATCH el alcance
+Medellín de su fuente. Se reutiliza el mismo selector. Los informes de candidatos
+conservados retienen procedencia, versión y acquired_at; paginar no escribe el
+catálogo ni actualiza su adquisición. No se añaden candidatos desde SQLite ni
+reglas nuevas por ausencia confirmada. El indicador de dato conservado pertenece
+a calidad de ubicación y no incorpora los mensajes de flota aplazados APL-05.
 
 ## Contexto y seguridad
 
@@ -107,7 +114,7 @@ PRU332 · ⚠️ Hace 8 min · Ubicación C
 ```
 
 LOCATION: enviar UBICACION PRU332 → feedback → lista → responder 2 →
-«Consultando el registro seleccionado...» → nueva adquisición → última posición
+«Consultando el registro seleccionado...» → lectura del snapshot compartido → última posición
 reportada del VEHID del segundo. No muestra datos del primero ni del tercero.
 
 CREATE_WATCH: enviar VIGILAR PRU332 → feedback → snapshot central → lista →
@@ -132,9 +139,10 @@ selecciona el segundo. Incluye continuidad por VEHID tras cambios, desaparición
 expiración, replay, propietarios, consumo concurrente, oferta tardía, paginación,
 firma, allowlist y deduplicación. No se valida Meta/GPSpace real con pytest.
 
-Quedan pendientes persistencia y coordinación entre procesos. Los contextos ya
+Los contextos siguen en memoria, sin restauración. La autoridad de adquisición
+tiene exclusión local CLI/servidor; no coordina otros hosts. Los contextos ya
 se aíslan por propietario autorizado; no hay administración persistente de roles.
 La entrega del selector depende de Meta y de la ventana de atención. Una lista
 puede mostrar datos que cambiaron desde su adquisición; por eso siempre se
-refresca el VEHID seleccionado. No hay reintentos automáticos de una selección
+resuelve de nuevo el VEHID seleccionado sobre el snapshot compartido. No hay reintentos automáticos de una selección
 consumida ni heurísticas para decidir registros indistinguibles.

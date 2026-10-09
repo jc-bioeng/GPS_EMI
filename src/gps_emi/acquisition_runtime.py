@@ -106,7 +106,7 @@ def default_lock_path():
 
 class AcquisitionRuntime:
     def __init__(self, *, official=False, interval=30, max_backoff=300,
-                 source=None, mapping=None, lock_path=None):
+                 source=None, mapping=None, lock_path=None, catalog=None):
         global _current
         if not math.isfinite(max_backoff) or max_backoff <= 0:
             raise ValueError('Backoff de adquisición inválido.')
@@ -125,7 +125,13 @@ class AcquisitionRuntime:
                 raise AuthorityBusy()
             lease = HostLease(lock_path or default_lock_path())
             try:
-                self.coordinator = Coordinator(source, config, lease=lease)
+                if official and catalog is None:
+                    from gps_emi.catalog import CatalogStore
+                    from gps_emi.analysis.collector import DEFAULT_DB
+                    catalog = CatalogStore(os.environ.get('GPS_EMI_DATA_DB', DEFAULT_DB))
+                if catalog is not None:
+                    catalog.initialize()
+                self.coordinator = Coordinator(source, config, lease=lease, catalog=catalog, mapping=mapping)
                 self.source = SnapshotSource(self.coordinator, mapping)
             except BaseException:
                 lease.close()

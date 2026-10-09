@@ -1,6 +1,6 @@
 # Manual de operación
 
-Revisión del 9 de octubre de 2026, reconciliada con fase 2. Estos comandos son instrucciones para el
+Revisión del 9 de octubre de 2026, reconciliada con fase 3 local. Estos comandos son instrucciones para el
 operador; documentarlos no implica ejecutarlos ni certificar un despliegue.
 Consultar [arquitectura](guia-del-sistema.md) y [estado de implementación](README.md).
 
@@ -25,7 +25,7 @@ de sesiones no carga `.env` ni consulta GPSpace.
 | `WHATSAPP_ALLOWED_NUMBERS` | Remitentes admitidos |
 | `WHATSAPP_API_VERSION` | Versión de API configurada |
 | `WHATSAPP_ARRIVAL_MODE`, `WHATSAPP_ARRIVAL_TEMPLATE`, `WHATSAPP_TEMPLATE_LANGUAGE` | Modalidad y plantilla de llegada |
-| `GPS_EMI_DATA_DB` | SQLite, por defecto `data/gps_observations.db` |
+| `GPS_EMI_DATA_DB` | SQLite compartido por catálogo oficial/campañas; por defecto `data/gps_observations.db` |
 | `GPS_EMI_COLLECTION_HEARTBEAT_SECONDS` | Persistencia periódica de datos idénticos; 300 s por defecto |
 | `LOG_LEVEL`, `GPS_EMI_LOG_SUMMARY_SECONDS` | Nivel y frecuencia de resúmenes; INFO y 300 s por defecto |
 
@@ -33,7 +33,12 @@ Los nombres no son credenciales. No copiar valores de sesión a documentación,
 comandos compartidos ni Git. La autenticación del portal sigue siendo externa,
 sin renovación automática. `--official` selecciona RenderExcel usando las
 variables WIDETECH; sin esa opción se usa el legado. No hay fallback automático.
-Los dos modos comparten Coordinator y su política de adquisición.
+Los dos modos comparten Coordinator y su política de adquisición. En modo oficial,
+el arranque prepara de forma aditiva las tablas catalog_* antes de adquirir.
+Usar una ruta absoluta de GPS_EMI_DATA_DB común a CLI y servidor: su valor
+predeterminado relativo conserva compatibilidad, pero depende del cwd.
+Respaldar la base antes de una activación posterior. Este encargo solo migró bases
+temporales de pruebas; no iniciar el servicio sobre la base operativa para probar.
 
 ## Consola y WhatsApp
 
@@ -54,7 +59,11 @@ Tras reinicio se espera el primer snapshot; la aplicación informa inicializaci�
 y no presenta posiciones de SQLite como actuales. Consultas con caché muestran
 su antigüedad. CLI y servidor requieren ejecución exclusiva en esa instalación:
 ambos deben usar el mismo GPS_EMI_STATE_DIR, independiente del cwd. No hay IPC
-ni coordinación con otras instalaciones/hosts.
+ni coordinación con otras instalaciones/hosts. En modo oficial, las consultas
+son nacionales de ambulancias; vigilancias y collector siguen en Medellín.
+Desaparición confirmada no equivale a baja o reclasificación; no introduce un
+filtro nuevo de candidatos. La reclasificación confirmada termina internamente
+la vigilancia sin notificación proactiva. No se restauran vigilancias ni posiciones.
 
 Las comillas de Poblado son necesarias por el espacio. Ctrl+C detiene el proceso.
 No lanzar otra instancia sobre el mismo puerto. La CLI usa los nombres exactos
@@ -150,6 +159,7 @@ por el programa. Un rollback de imagen no garantiza reversión del esquema.
 | `UNAVAILABLE` | Último intento global fallido; conservar snapshot anterior y su edad |
 | `BLOCKED_METHOD` | Fallo terminal de autenticación/autorización/configuración o funcional; requiere intervención, no implica caída general de WideTech |
 | `STOPPED` | Autoridad detenida; no admite adquisiciones |
+| Categoría `persistence` | SQLite impidió persistir el catálogo; se conserva el snapshot anterior y se reinicia la secuencia provisional de ausencias |
 | Errores de red | Revisar conectividad y backoff, sin asumir que el móvil salió de sede |
 | Respuesta vacía o malformada | Revisar categoría del proveedor; no equivale a flota vacía válida |
 | STALE o DUPLICATE | Posición antigua o ya procesada; no implica movimiento nuevo |
@@ -172,7 +182,8 @@ y el entorno alternativo utilizado; no confundir esa ejecución con una nueva.
 Fase 2 registra 919 tests anteriores y 933 tras cerrar los dos hallazgos.
 La [especificación de fase 2](widetech-official-phase2-spec.md) separa la regresión
 ejecutada para este commit y las pruebas CLI reportadas por el usuario el
-9 de octubre. Revisar por separado pruebas offline, aceptación externa y despliegue.
+9 de octubre. La [fase 3](widetech-official-phase3.md) registra su propia ejecución
+offline y migraciones temporales. Revisar por separado pruebas offline, aceptación externa y despliegue.
 
 Excluir secretos, SQLite, CSV, logs, caches y artefactos de prueba. Preservar
 cambios locales ajenos al incremento. `.codemapignore` procede del uso de Codemap

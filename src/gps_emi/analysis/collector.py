@@ -10,6 +10,7 @@ from pathlib import Path
 from queue import Queue, Full, Empty
 import sqlite3
 from threading import Event, Lock, Thread
+from gps_emi.database import connect_database, utc_text
 
 logger = logging.getLogger(__name__)
 DEFAULT_DB = 'data/gps_observations.db'
@@ -17,12 +18,6 @@ DATA_COLUMNS = ('vehicle_id', 'mobile_number', 'plate', 'vehicle_name_raw',
                 'vehicle_license_raw', 'gps_reported_at', 'latitude', 'longitude',
                 'speed', 'ignition', 'gps_fix', 'zones', 'zones_raw', 'reported_location')
 EXPORT_COLUMNS = ('id', 'acquired_at') + DATA_COLUMNS
-
-
-def utc_text(value):
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError('Se requiere timestamp con offset.')
-    return value.astimezone(timezone.utc).isoformat(timespec='microseconds')
 
 
 def json_value(value):
@@ -48,8 +43,7 @@ class ObservationStore:
         self.heartbeat_seconds = heartbeat_seconds
 
     def _connect(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(self.path, timeout=0.25)
+        connection = connect_database(self.path)
         try:
             version = connection.execute('PRAGMA user_version').fetchone()[0]
             if version not in (0, 1, 2):

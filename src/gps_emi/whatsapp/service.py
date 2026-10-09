@@ -164,7 +164,8 @@ class MessageService:
                     response = fmt.format_location(query(source, argument, self.watch_config))
             except AmbiguousVehicleError as error:
                 if operation == 'location' and error.candidates:
-                    self._offer_selection(sender, SelectionOperation.LOCATION, argument, error.candidates, sender, generation)
+                    self._offer_selection(sender, SelectionOperation.LOCATION, argument, error.candidates, sender, generation,
+                                          reports=error.candidate_reports)
                     continue
                 response = identifier_error('selected_unavailable' if operation == 'selected' else 'ambiguous', argument)
             except VehicleNotFoundError:
@@ -183,9 +184,9 @@ class MessageService:
         self.messenger.vehicle_selection(sender, context, self.watch_config, page)
         self.vehicle_choices[sender] = [interactive_command(row['id']) for row in rows]
 
-    def _offer_selection(self, sender, operation, identifier, candidates, target, generation):
+    def _offer_selection(self, sender, operation, identifier, candidates, target, generation, *, reports=()):
         try:
-            context = self.selections.offer(sender, operation, identifier, candidates, target, generation)
+            context = self.selections.offer(sender, operation, identifier, candidates, target, generation, reports=reports)
             if context is not None:
                 self._show_selection(sender, context)
         except SelectionError:

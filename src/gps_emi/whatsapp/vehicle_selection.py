@@ -15,21 +15,24 @@ def selection_payload(context, config=None, page=0):
         raise ValueError('Página no disponible.')
     rows = []
     now = runner.local_now()
-    for token, vehicle in zip(context.choice_ids, context.candidates):
-        description = f'{display(vehicle.plate)} · {freshness(describe_vehicle(vehicle, now, config or WatchConfig()))} · {display_location(vehicle.location)}'
+    for token, vehicle, report in zip(context.choice_ids, context.candidates, context.candidate_reports):
+        conserved = 'Conservado · ' if report.acquisition and report.acquisition.retained else ''
+        description = conserved + f'{display(vehicle.plate)} · {freshness(describe_vehicle(vehicle, now, config or WatchConfig()))} · {display_location(vehicle.location)}'
         rows.append({'id': f'vehicle_select:{context.selection_id}:{token}',
                      'title': (vehicle.mobile_number or vehicle.plate or 'Registro')[:24],
                      'description': description.replace('\n', ' ')[:72]})
     duplicates = Counter((r['title'], r['description']) for r in rows)
-    for row, vehicle in zip(rows, context.candidates):
+    for row, vehicle, report in zip(rows, context.candidates, context.candidate_reports):
         if duplicates[row['title'], row['description']] > 1:
-            row['description'] = (f'GPS: {display(vehicle.gps_timestamp)} · Fix: {display(vehicle.gps_fix)}'
+            conserved = 'Conservado · ' if report.acquisition and report.acquisition.retained else ''
+            row['description'] = (conserved + f'GPS: {display(vehicle.gps_timestamp)} · Fix: {display(vehicle.gps_fix)}'
                                   f' · Vel: {display(vehicle.speed)} · Ign: {display(vehicle.ignition)}')[:72]
     duplicates = Counter((r['title'], r['description']) for r in rows)
-    for row, vehicle in zip(rows, context.candidates):
+    for row, vehicle, report in zip(rows, context.candidates, context.candidate_reports):
         if duplicates[row['title'], row['description']] > 1:
             # Último recurso: los datos visibles disponibles no distinguen registros.
-            row['description'] = ('Registro: ' + vehicle.vehid)[:72]
+            conserved = 'Conservado · ' if report.acquisition and report.acquisition.retained else ''
+            row['description'] = (conserved + 'Registro: ' + vehicle.vehid)[:72]
     if len({(r['title'], r['description']) for r in rows}) != len(rows):
         raise SelectionError('unavailable')
     page_rows = rows[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]

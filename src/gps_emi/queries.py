@@ -9,7 +9,7 @@ from gps_emi.acquisition import SnapshotSource
 from gps_emi.models import Vehicle
 from gps_emi.monitoring import runner
 from gps_emi.monitoring.observation import ObservationAssessment, ObservationValidator
-from gps_emi.resolution import find_vehicle, find_vehicle_by_id
+from gps_emi.resolution import find_vehicle, find_vehicle_by_id, AmbiguousVehicleError
 from gps_emi.sites import matching_sites, validate_site
 
 
@@ -92,8 +92,13 @@ def get_vehicle_location(client: runner.VehicleSource, identifier: str,
     """Una lectura del snapshot y resolución por placa o móvil."""
     config = config or WatchConfig()
     client, acquisition = _snapshot(client)
-    vehicle = find_vehicle(client.get_vehicles(), identifier)
     queried_at = (now if now is not None else runner.local_now)()
+    try:
+        vehicle = find_vehicle(client.get_vehicles(), identifier)
+    except AmbiguousVehicleError as error:
+        error.candidate_reports = tuple(describe_vehicle(v, queried_at, config,
+            _vehicle_acquisition(client, v, acquisition)) for v in error.candidates)
+        raise
     return describe_vehicle(vehicle, queried_at, config, _vehicle_acquisition(client, vehicle, acquisition))
 
 

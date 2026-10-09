@@ -1,7 +1,8 @@
 # Guía del sistema
 
 Estado revisado el 9 de octubre de 2026: base histórica `03ee209`, fase 1
-versionada en `eda2606` y adquisición central implementada en fase 2.
+versionada en `eda2606`, fase 2 versionada en `24dae94` y fase 3 local
+con catálogo persistente y consultas nacionales.
 Ver [índice y estado](README.md) y [manual de operación](operacion.md).
 
 ## Propósito y componentes
@@ -16,6 +17,7 @@ medición en tiempo real ni se calcula pertenencia por distancia o polígonos pr
 | `gpspace_loaddatalog.py`, `gps_emi.cli` | Consola, consultas y vigilancia individual |
 | `acquisition_runtime.py`, `acquisition.py` | Autoridad exclusiva, planificación central y snapshot compartido |
 | `providers/widetech.py`, `providers/load_data_log.py` | Transporte legado y Parameters dinámicos; fachada de lectura para consumidores |
+| `catalog.py`, `database.py` | Identidad/presencia nacional persistente y conexión SQLite común |
 | `queries.py`, `monitoring/observation.py` | Consultas y evaluación de observaciones |
 | `monitoring` | Estado de llegada, vigilancias y distribución de snapshots |
 | `selection` | Contextos temporales para selección explícita de candidatos |
@@ -40,7 +42,8 @@ flowchart TD
   M --> R
   R --> K[Coordinator: única adquisición y planificación]
   K --> L[Adaptador elegido: RenderExcel o legado]
-  L --> S[Snapshot inmutable]
+  L --> T[Catálogo: persistir antes de publicar]
+  T --> S[Snapshot inmutable y vista de catálogo]
   S --> V[SnapshotSource: proyección operacional]
   V --> Q
   V --> C
@@ -85,9 +88,12 @@ explícitamente Movil y VEH_NAM, sin deducir placas por formato. Snapshot conser
 originales, diagnósticos y procedencia; una fila inválida no congela las válidas.
 Las filas anteriores conservadas mantienen su versión y edad y no alimentan
 nuevas observaciones de vigilancias/collector. Cobertura siempre desconocida.
-La proyección oficial actual acepta Ambulancias Medellín/Medellin. Las consultas
-y campañas nacionales están aprobadas para fases 3 y 4; las vigilancias continúan
-restringidas a Medellín. No se confunde ausencia con reclasificación.
+La proyección oficial de consultas acepta el prefijo Ambulancias a nivel nacional.
+Vigilancias y collector conservan Medellín/Medellin; campañas nacionales siguen
+para fase 4. La vista de catálogo persiste antes de publicar y distingue presencia
+de calidad GPS. No se confunde ausencia con reclasificación. Una flota distinta
+confirmada termina la vigilancia con causa interna fleet_changed, sin mensaje
+proactivo WhatsApp. Véase [fase 3](widetech-official-phase3.md).
 
 La resolución acepta placa o número de móvil, elimina espacios exteriores e
 ignora mayúsculas. El alias `amb20` permite encontrar `AMB-20`; no transforma
@@ -125,6 +131,13 @@ un intento de envío: aceptación por Meta no confirma entrega y no hay reintent
 durable automático. Las vigilancias y conversaciones se pierden al reiniciar.
 
 ## Recolección y tiempo
+
+SQLite conserva sesiones, observaciones y, en modo oficial, catálogo nacional
+con eventos confirmados. Tres adquisiciones nuevas aptas consecutivas sin una
+identidad confirman ausencia observada, no baja. Errores/lotes no aptos rompen
+la secuencia; reiniciar conserva eventos y reinicia contadores provisionales.
+La política TEC-01 fue aprobada con el límite de no detectar recortes silenciosos.
+No se restauran ubicaciones ni vigilancias desde ese catálogo.
 
 SQLite conserva sesiones y observaciones. La migración desde el collector inicial
 añade la relación de sesión sin atribuir las filas antiguas a una campaña:
@@ -172,7 +185,7 @@ vigilancias y collector. No hay fallback a LoadDataLog ni activación implícita
 
 Identidad VEH_ID, cobertura nacional por fases, geocercas EMI y zona inicial
 America/Bogota ya están decididas. Falta verificar detalles técnicos de etiquetas
-y variantes reales (TEC-02), criterio de parcialidad para fase 3 (TEC-01) y
+y variantes reales (TEC-02), además de
 límites externos: cuota efectiva y envoltura de errores RenderExcel. El intervalo
 aprobado es 30 segundos configurable; no certifica la cuota del proveedor.
 

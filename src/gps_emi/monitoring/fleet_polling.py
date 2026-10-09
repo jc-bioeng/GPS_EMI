@@ -1,6 +1,6 @@
 """Distribute central snapshots; no HTTP scheduler or retry policy here."""
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 from threading import Condition, Event, Lock, Thread
 
@@ -60,6 +60,7 @@ class FleetPolling:
             if snapshot is None:
                 self.condition.notify_all()
                 return
+            self.manager.reconcile_identities(snapshot.identities)
             if self.pending or self.manager.has_active():
                 if len(self.snapshots) >= self.coordinator.config.capacity:
                     self.snapshots.popleft()
@@ -68,7 +69,7 @@ class FleetPolling:
             self.condition.notify_all()
         if self.collection_active():
             try:
-                self.collector.submit(self.source.bind(snapshot).get_vehicles(include_retained=False), snapshot.acquired_at)
+                self.collector.submit(self.source.bind(snapshot).get_vehicles(include_retained=False, purpose='collector'), snapshot.acquired_at)
             except Exception:
                 logger.warning('Collector no disponible; entrega omitida, sin detalles sensibles.')
 
@@ -134,7 +135,10 @@ class FleetPolling:
                 expired = [r for r in self.pending if self._valid(r) and now >= r.deadline]
                 self.pending = [r for r in self.pending if self._valid(r) and now < r.deadline]
                 snapshot = self.snapshots.popleft() if self.snapshots else self.coordinator.peek()
-                requests, self.pending = (self.pending, []) if snapshot is not None else ([], self.pending)
+                # Drain older observations before admitting new watches. Otherwise
+                # an old queued fleet could override an already confirmed change.
+                requests, self.pending = ((self.pending, []) if snapshot is not None and not self.snapshots
+                                          else ([], self.pending))
             for request in expired:
                 self._callback(self.on_error, request, 'acquisition')
             if snapshot is None:
@@ -142,7 +146,12 @@ class FleetPolling:
             version = (snapshot.epoch, snapshot.version)
             if version == self.last_version and not requests:
                 return
-            vehicles = self.source.bind(snapshot).get_vehicles(include_retained=False)
+            current = self.coordinator.peek()
+            # Observation order stays intact; identity metadata must not regress
+            # while draining a backlog. Original GPS records remain untouched.
+            projected = (replace(snapshot, catalog=current.catalog, identities=current.identities)
+                         if current is not None else snapshot)
+            vehicles = self.source.bind(projected).get_vehicles(include_retained=False, purpose='watch')
             created, errors, selections = [], [], []
             with self.condition:
                 if self.closed:
@@ -167,6 +176,7 @@ class FleetPolling:
                     except Exception:
                         errors.append((request, 'identity'))
             only_new = {w.watch_id for w, new in created if new} if version == self.last_version else None
+            self.manager.reconcile_identities(projected.catalog.entries if projected.catalog else projected.identities)
             self.manager.process_snapshot(vehicles, watch_ids=only_new)
             self.last_version = version
             from gps_emi.observability import metrics

@@ -9,7 +9,7 @@ Este es el registro de referencia de **decisiones aprobadas**, no una descripci�
 
 Antes de planificar o implementar una fase, leer este documento y la especificación de esa fase. No presentar una decisión aprobada como una pregunta pendiente porque todavía no exista en el código. No confundir una funcionalidad aplazada con un requisito olvidado ni implementar automáticamente una ampliación aplazada para “cerrar deuda”.
 
-La autorización actual es documentar estos acuerdos. Este registro no activa el proveedor, autoriza cambios de bases de datos ni ejecuta despliegues. La aprobación arquitectónica del despliegue gradual define su procedimiento; no acredita su realización.
+La autorización original de este registro fue documentar estos acuerdos. Los encargos posteriores de implementación se registran por fase, separados de los acuerdos. Este registro por sí solo no activa el proveedor, autoriza cambios de bases operativas ni ejecuta despliegues. La aprobación arquitectónica del despliegue gradual define su procedimiento; no acredita su realización.
 
 Estados utilizados:
 
@@ -143,7 +143,7 @@ Las pruebas acompañan cada fase. La fase 6 no es el primer momento para probar.
 
 | ID | Detalle | Fase | Límite de la decisión pendiente |
 |---|---|---|---|
-| TEC-01 | Detección de adquisiciones sospechosamente parciales | 3 (pendiente) | Está aprobado no contar ausencias con ellas. Falta el criterio; no inventar un porcentaje arbitrario ni asumir que XML válido certifica cobertura. |
+| TEC-01 | Admisión de adquisiciones para contar ausencias | 3 (política aprobada el 9 de octubre) | Nuevas, no vacías, sin diagnósticos ni identidades duplicadas y con identidad/flota interpretables en todas las filas. Error/lote no apto reinicia secuencia. El usuario aceptó que no detecta recortes silenciosos; no certifica cobertura ni usa porcentajes. Véase [fase 3](widetech-official-phase3.md). |
 | TEC-02 | Mapping y normalización de etiquetas y nombres reales de flota | 1–3 | `VEH_ID`, prefijo Ambulancias y cobertura Medellín ya están aprobados. Falta verificar correspondencia exacta Movil/VEH_NAM y variantes observadas, sin deducir placa por formato. |
 | TEC-03 | Identidad de observación/deduplicación y colisiones de timestamp | 4 | Debe impedir duplicados, admitir históricos nuevos fuera de orden y mantener identidad por VEH_ID. |
 | TEC-04 | Admisión de lotes y drenaje de escrituras al terminar campaña | 4 | Concretar inicio de escritura/admisión y fronteras temporales conservando COL-02/03. No extender duración ni perder escrituras autorizadas por una carrera. |
@@ -153,6 +153,15 @@ Las pruebas acompañan cada fase. La fase 6 no es el primer momento para probar.
 | TEC-08 | Inventario de registros técnicos sujetos a retención y reversión de esquema | 4–6 | Los 30 días y las exclusiones ya están aprobados. Concretar tablas/archivos y procedimiento recuperable. |
 
 Resolver decisiones materiales al entrar en su fase, no pedir nuevamente el alcance nacional, los 30 segundos, la zona inicial, los cinco minutos, las doce horas o la retención aprobada.
+
+## Estado de implementación posterior (separado de los acuerdos)
+
+Fase 2 está versionada en `24dae94`. Fase 3 se implementó localmente sin despliegue;
+su commit selectivo posterior, resultados y pruebas se documentan en
+[fase 3](widetech-official-phase3.md). TEC-01 fue resuelto mediante la pregunta
+concreta del encargo y aprobación expresa del usuario, con el límite indicado.
+Los acuerdos CAT, DAT, VIG y APL permanecen intactos. No se aprueban propuestas
+sobre mostrar ausentes en selectores o bloquear nuevas vigilancias por ese estado.
 
 ## Evidencia externa y cierre de errores de fase 1
 

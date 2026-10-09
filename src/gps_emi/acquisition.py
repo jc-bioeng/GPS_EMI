@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from gps_emi.errors import AcquisitionError, TransientAcquisitionError
 from gps_emi.models import Vehicle, normalize_plate
+from gps_emi.catalog import identities, Identity, CatalogView, MEDELLIN_FLEETS
 from gps_emi.providers.widetech_official import AcquisitionResult, ErrorKind, OfficialAcquisitionError, OfficialRecord
 
 
@@ -72,6 +73,8 @@ class Snapshot:
     # Legacy deployment bridge only. Copies are never handed out directly.
     _legacy: tuple[Vehicle, ...] = ()
     operational: tuple[RecordState, ...] = ()
+    identities: tuple[Identity, ...] = ()
+    catalog: CatalogView | None = None
 
     @property
     def usable_records(self):
@@ -126,9 +129,10 @@ class Coordinator:
     explicit composition. No fallback between sources exists.
     """
     def __init__(self, source, config=None, *, monotonic=time.monotonic,
-                 utcnow=lambda: datetime.now(timezone.utc), lease=None):
+                 utcnow=lambda: datetime.now(timezone.utc), lease=None, catalog=None, mapping=None):
         self.source, self.config = source, config or AcquisitionConfig()
         self.monotonic, self.utcnow, self.lease = monotonic, utcnow, lease
+        self.catalog, self.mapping = catalog, mapping
         self.condition = Condition()
         self.epoch = uuid4().hex
         self._snapshot = self._received = None
@@ -274,10 +278,19 @@ class Coordinator:
                 batch = result if isinstance(result, AcquisitionResult) else None
                 self._received = Snapshot(self.epoch, version, acquired, batch,
                                           () if batch else tuple(replace(v, zones=tuple(v.zones)) for v in result),
-                                          _reconcile(batch, self._snapshot, self.epoch, version, acquired) if batch else ())
-                self._snapshot = self._received
-                self.published_at = finished
+                                          _reconcile(batch, self._snapshot, self.epoch, version, acquired) if batch else (),
+                                          identities(batch, self.mapping) if batch else ())
+                try:
+                    if batch is not None and self.catalog is not None:
+                        self._received = replace(self._received, catalog=self.catalog.apply(self._received))
+                except Exception:
+                    error = ('persistence', None)
+                else:
+                    self._snapshot = self._received
+                    self.published_at = finished
             if error is not None:
+                if self.catalog is not None:
+                    self.catalog.interrupt()
                 logging.getLogger(__name__).warning('Adquisición fallida: categoría=%s.', error[0])
                 self.metrics["errors"] += 1
                 self.last_error = error
@@ -374,7 +387,7 @@ class LabelMapping:
 
 
 class SnapshotSource:
-    """Read-only operational projection; national evidence remains in snapshot."""
+    """One projection, explicit consumer scope; all national evidence is retained."""
     def __init__(self, coordinator, mapping=None, *, snapshot=None):
         self.coordinator, self.mapping, self.fixed = coordinator, mapping, snapshot
 
@@ -387,25 +400,31 @@ class SnapshotSource:
     def bind(self, snapshot):
         return SnapshotSource(self.coordinator, self.mapping, snapshot=snapshot)
 
-    def get_vehicles(self, *, include_retained=True):
+    def get_vehicles(self, *, include_retained=True, purpose='query'):
+        if purpose not in ('query', 'watch', 'collector'):
+            raise ValueError('Política de consumo desconocida.')
         snapshot = self.snapshot()
         if snapshot.result is None:
             return list(snapshot.records)
         if self.mapping is None:
             raise ValueError("Falta mapping explícito de etiquetas.")
         vehicles = []
+        metadata = {v.vehicle_id: v for v in (snapshot.catalog.entries if snapshot.catalog else snapshot.identities)}
         for state in snapshot.operational:
             if state.retained_reason is not None and not include_retained:
                 continue
             row = state.record
-            if row.fleet_name not in ("Ambulancias Medellín", "Ambulancias Medellin"):
+            identity = metadata.get(row.vehicle_id)
+            fleet = identity.fleet_name if identity and identity.fleet_name else row.fleet_name
+            allowed = bool(fleet and fleet.startswith('Ambulancias')) if purpose == 'query' else fleet in MEDELLIN_FLEETS
+            if not allowed:
                 continue
             # Existing consumers compare naive Bogota wall times. Preserve the
             # instant by converting before removing tzinfo; originals stay central.
             gps = row.gps_timestamp.astimezone(ZoneInfo("America/Bogota")).replace(tzinfo=None) if row.gps_timestamp else None
             vehicles.append(Vehicle(
-                vehid=row.vehicle_id, plate=normalize_plate(row.raw.get(self.mapping.plate_field) or ""),
-                mobile_number=(row.raw.get(self.mapping.mobile_field) or "").strip(),
+                vehid=row.vehicle_id, plate=(identity.plate if identity and identity.plate is not None else normalize_plate(row.raw.get(self.mapping.plate_field) or "")),
+                mobile_number=(identity.mobile_number if identity and identity.mobile_number is not None else (row.raw.get(self.mapping.mobile_field) or "").strip()),
                 gps_timestamp=gps, location=row.raw.get("Localizacion"), speed=row.speed,
                 ignition=row.ignition, gps_fix=row.gps_fix, zones=list(row.zones),
                 latitude=row.latitude, longitude=row.longitude, zones_raw=row.raw.get("Zones"),

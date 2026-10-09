@@ -55,7 +55,7 @@ class PendingSelections:
         with self._lock:
             return self._generation.get(owner_id)
 
-    def offer(self, owner_id, operation, identifier, candidates, target, generation):
+    def offer(self, owner_id, operation, identifier, candidates, target, generation, *, reports=()):
         with self._lock:
             if generation is None or generation != self._generation.get(owner_id):
                 return None
@@ -64,10 +64,12 @@ class PendingSelections:
             if len(ids) < 2 or any(not vid for vid in ids) or len(set(ids)) != len(ids):
                 raise SelectionError('unavailable')
             candidates = deepcopy(tuple(candidates))
+            if reports and tuple(r.vehicle.vehid for r in reports) != tuple(ids):
+                raise SelectionError('unavailable')
             observed_at = runner.local_now()
             context = PendingVehicleSelection(uuid4().hex, owner_id, operation, identifier,
                 candidates, self.now(), target, tuple(uuid4().hex for _ in candidates),
-                tuple(describe_vehicle(v, observed_at, self.config) for v in candidates))
+                deepcopy(tuple(reports)) if reports else tuple(describe_vehicle(v, observed_at, self.config) for v in candidates))
             self._pending[owner_id] = context
             return deepcopy(context)
 

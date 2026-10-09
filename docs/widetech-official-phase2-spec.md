@@ -10,6 +10,11 @@ despliegue, llamadas reales, cambios al .env operativo, migraciones, commit ni
 push. La reconciliación documental y el commit selectivo posteriores del
 9 de octubre se registran por separado al final de la evidencia.
 
+Este documento conserva el alcance y evidencia del cierre de fase 2. La
+[implementación local de fase 3](widetech-official-phase3.md) amplía consultas
+a nivel nacional e incorpora catálogo persistente y reclasificaciones; las
+limitaciones de alcance descritas abajo corresponden al incremento anterior.
+
 ## Arquitectura final y responsabilidad extraída
 
 ```mermaid

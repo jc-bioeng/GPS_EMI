@@ -19,6 +19,7 @@ class AmbiguousVehicleError(VehicleResolutionError):
     def __init__(self, message, candidates=()):
         super().__init__(message)
         self.candidates = tuple(candidates)
+        self.candidate_reports = ()
 
 
 class ResolutionStatus(str, Enum):
@@ -61,10 +62,10 @@ def find_vehicle(vehicles: Iterable[Vehicle], identifier: str) -> Vehicle:
     """Interfaz fail-safe conservada para CLI y consumidores existentes."""
     result = resolve_vehicle(vehicles, identifier)
     if result.status == ResolutionStatus.NOT_FOUND:
-        raise VehicleNotFoundError("No se encontró el móvil entre Ambulancias Medellín.")
+        raise VehicleNotFoundError("No se encontró el móvil en el alcance de esta operación.")
     if result.status == ResolutionStatus.AMBIGUOUS:
         raise AmbiguousVehicleError(
-            "El identificador es ambiguo: coincide con varios móviles de Ambulancias Medellín.", result.candidates
+            "El identificador es ambiguo: coincide con varios móviles.", result.candidates
         )
     return result.vehicle
 

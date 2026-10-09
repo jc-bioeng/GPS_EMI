@@ -1,9 +1,11 @@
 """Orquestación de una vigilancia; nunca convierte fallos en observaciones."""
 import logging
+from threading import Event
 from typing import Protocol
 
 from gps_emi.config import WatchConfig
 from gps_emi.acquisition import SnapshotSource
+from gps_emi.catalog import MEDELLIN_FLEETS
 from gps_emi.clock import operational_now
 from gps_emi.errors import AcquisitionError
 from gps_emi.models import Vehicle
@@ -52,6 +54,13 @@ class WatchRunner:
         self._diagnostic_timestamp = object()
         self._diagnostics: set[str] = set()
         self._result: int | None = None
+        self._fleet_changed = Event()
+
+    def _published(self, snapshot):
+        if snapshot is not None and self.vehid is not None and any(
+                item.vehicle_id == self.vehid and item.fleet_name and item.fleet_name not in MEDELLIN_FLEETS
+                for item in snapshot.identities):
+            self._fleet_changed.set()
 
     def _warn_once(self, code, message, *args):
         if code not in self._diagnostics:
@@ -106,9 +115,14 @@ class WatchRunner:
             try:
                 snapshot = self.client.wait(after_version=version, stop_event=self.stop_event)
                 version = (snapshot.epoch, snapshot.version)
-                vehicles = self.client.bind(snapshot).get_vehicles(include_retained=False)
+                self._published(snapshot)
+                if self._fleet_changed.is_set():
+                    self.failure_code = 'fleet_changed'
+                    logger.info('Vigilancia terminada: reason=fleet_changed.')
+                    return 1
+                vehicles = self.client.bind(snapshot).get_vehicles(include_retained=False, purpose='watch')
             except AcquisitionError as error:
-                self.failure_code = "acquisition"
+                self.failure_code = 'fleet_changed' if self._fleet_changed.is_set() else "acquisition"
                 logger.error("%s Vigilancia detenida.", error.public_message)
                 return 1
             if self.stop_event is not None and self.stop_event.is_set():
@@ -126,6 +140,10 @@ class WatchRunner:
                     logger.error("%s Vigilancia detenida.", error)
                     return 1
                 self.vehid = vehicle.vehid
+                self._published(self.client.coordinator.peek())
+                if self._fleet_changed.is_set():
+                    self.failure_code = 'fleet_changed'
+                    return 1
                 self.monitor = ArrivalMonitor(vehicle.display_identifier, self.destination)
                 logger.info("Identificador resuelto: VEHID=%s, placa=%s, móvil=%s.",
                             vehicle.vehid, vehicle.plate, vehicle.mobile_number)
@@ -147,6 +165,7 @@ class WatchRunner:
     def run(self) -> int:
         if self._result is not None:
             return self._result
+        self.client.coordinator.subscribers.append(self._published)
         try:
             self._result = self._run()
         except (KeyboardInterrupt, EOFError):
@@ -158,6 +177,8 @@ class WatchRunner:
             # reintenta una notificación fallida: podría haberse enviado ya.
             logger.error("Error no recuperable durante la vigilancia; operación detenida.")
             self._result = 1
+        finally:
+            self.client.coordinator.subscribers.remove(self._published)
         return self._result
 
 

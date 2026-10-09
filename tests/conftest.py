@@ -22,6 +22,7 @@ def offline(monkeypatch, caplog, tmp_path):
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     monkeypatch.setattr(time, "sleep", forbidden)
     monkeypatch.setattr('gps_emi.acquisition_runtime.default_lock_path', lambda: tmp_path/'authority.lock')
+    monkeypatch.setenv('GPS_EMI_DATA_DB', str(tmp_path/'gps-test.db'))
     # El servidor simulado nunca inicia persistencia local real.
     monkeypatch.setattr('gps_emi.whatsapp.server.start_collector', lambda: None)
     monkeypatch.setattr('gps_emi.analysis.collector.start_collector', lambda: None)

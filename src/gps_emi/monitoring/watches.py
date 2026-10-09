@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from gps_emi.config import WatchConfig
 from gps_emi.models import Vehicle, ArrivalEvent
+from gps_emi.catalog import MEDELLIN_FLEETS
 from .arrival import ArrivalMonitor
 from .observation import ObservationAssessment, ObservationValidator, ObservationStatus, observe_resolved_vehicle, gps_fix_warning
 from . import runner
@@ -119,6 +120,22 @@ class WatchManager:
             for watch in self._watches.values():
                 if watch.status == WatchStatus.ACTIVE:
                     watch.status = WatchStatus.CANCELLED
+
+    def reconcile_identities(self, identities):
+        """Confirmed metadata only; termination is internal, without notification."""
+        index = {item.vehicle_id: item for item in identities}
+        with self._lock:
+            for watch in self._watches.values():
+                item = index.get(watch.vehicle_id)
+                if watch.status != WatchStatus.ACTIVE or item is None:
+                    continue
+                if item.plate is not None:
+                    watch.plate = item.plate
+                if item.mobile_number is not None:
+                    watch.mobile_number = item.mobile_number
+                if item.fleet_name and item.fleet_name not in MEDELLIN_FLEETS:
+                    watch.status, watch.failure_code = WatchStatus.FAILED, 'fleet_changed'
+                    logger.info('Watch terminated watch_id=%s reason=fleet_changed', watch.watch_id)
 
     def process_snapshot(self, vehicles, *, observed_at=None, watch_ids=None):
         now = observed_at if observed_at is not None else self.now()
