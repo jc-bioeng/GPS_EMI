@@ -7,7 +7,7 @@ import pytest
 from gps_emi.config import WatchConfig
 from gps_emi.errors import SessionExpiredError, TransientAcquisitionError
 from gps_emi.models import Vehicle
-from gps_emi.providers.widetech import WideTechClient, normalize_vehicle, parse
+from gps_emi.providers.widetech import LegacyWideTechTransport as WideTechClient, normalize_vehicle, parse
 from gps_emi.queries import get_vehicle_location, list_vehicles_at_site, Movement
 from gps_emi.resolution import VehicleNotFoundError, AmbiguousVehicleError
 from gps_emi.sites import EMI_SITES

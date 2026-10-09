@@ -6,6 +6,7 @@ services:
       - .env
     environment:
       GPS_EMI_DATA_DB: /data/gps_observations.db
+      GPS_EMI_STATE_DIR: /data/state
     volumes:
       - gps-observations:/data
     ports:

@@ -21,6 +21,14 @@ def _display(value) -> str:
     return "N/D" if value is None or str(value).strip() == "" else str(value)
 
 
+def acquisition_note(result):
+    info = result.acquisition
+    if info is None:
+        return ''
+    prefix = 'Dato conservado; ' if info.retained else ''
+    return prefix + f"Última adquisición: {info.acquired_at.isoformat()} ({format_age(info.age_seconds)})."
+
+
 def format_speed(result: LocationResult) -> str:
     speed = result.vehicle.speed
     if not isinstance(speed, (float, int)) or not math.isfinite(speed):
@@ -56,6 +64,8 @@ def format_location(result: LocationResult) -> str:
     ]
     if gps_fix_warning(vehicle.gps_fix):
         lines.append("ADVERTENCIA: GPSFix=0; se conserva la última posición reportada.")
+    if result.acquisition is not None:
+        lines.append(acquisition_note(result))
     return "\n".join(lines)
 
 
@@ -63,12 +73,16 @@ def format_site_inventory(result: SiteResult) -> str:
     lines = [result.site,
              "Ambulancias cuya última posición reportada pertenece a esta geocerca.",
              "La lista no garantiza presencia física actual; los reportes STALE se conservan."]
+    if result.acquisition is not None:
+        lines.append(acquisition_note(result))
     if not result.entries:
         return "\n".join(lines + ["No hay ambulancias reportadas en esta sede."])
     rows = [("Móvil", "Placa", "Velocidad / movimiento", "Último reporte", "GPSFix")]
     for entry in result.entries:
         vehicle = entry.vehicle
         age = ("STALE — " if entry.stale else "") + format_age(entry.report_age)
+        if entry.acquisition is not None and entry.acquisition.retained:
+            age += ' — ' + acquisition_note(entry)
         fix = "0 (advertencia)" if gps_fix_warning(vehicle.gps_fix) else _display(vehicle.gps_fix)
         rows.append((_display(vehicle.mobile_number), _display(vehicle.plate),
                      format_speed(entry), age, fix))

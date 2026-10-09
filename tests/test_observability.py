@@ -15,7 +15,7 @@ def metrics(monkeypatch):
 
 
 def test_healthy_cycles_debug_and_state_change_only_info(metrics, caplog, monkeypatch):
-    source = widetech.WideTechClient()
+    source = widetech.LegacyWideTechTransport()
     monkeypatch.setattr(source, 'load_data_log', lambda: '{"Rows":[]}')
     for _ in range(20):
         assert source.get_vehicles() == []
@@ -31,7 +31,7 @@ def test_healthy_cycles_debug_and_state_change_only_info(metrics, caplog, monkey
     (TransientAcquisitionError,'NETWORK_ERROR'), (InvalidResponseError,'MALFORMED_RESPONSE'),
     (EmptyResponseError,'EMPTY_RESPONSE')])
 def test_failure_categories_and_recovery_never_log_payload(metrics, caplog, error, status):
-    source = widetech.WideTechClient()
+    source = widetech.LegacyWideTechTransport()
     source.load_data_log = Mock(side_effect=error('Authorization: DO_NOT_LOG_SECRET cookie=DO_NOT_LOG_SECRET'))
     for _ in range(2):
         with pytest.raises(error):

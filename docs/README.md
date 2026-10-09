@@ -1,9 +1,11 @@
 # Documentación de GPS_EMI
 
-Revisión: **8 de octubre de 2026**. Base operacional: `03ee209`;
-fase 1 oficial confirmada en `eda2606`.
+Revisión: **9 de octubre de 2026**. Base histórica: `03ee209`;
+fase 1 versionada en `eda2606`; cierre de fase 2 incluido en este incremento.
 
 ## Lectura recomendada
+
+Para RenderExcel, leer primero las [decisiones arquitectónicas aprobadas](decisiones-arquitectonicas-renderexcel.md). Separan acuerdos, funcionalidades aplazadas y detalles técnicos; prevalecen sobre propuestas históricas discrepantes.
 
 1. [Guía del sistema](guia-del-sistema.md): arquitectura, datos, reglas y límites.
 2. [Operación](operacion.md): configuración, comandos, persistencia y diagnóstico.
@@ -11,11 +13,12 @@ fase 1 oficial confirmada en `eda2606`.
 
 | Área | Documento |
 | --- | --- |
+| Decisiones vigentes y fases | [Registro aprobado](decisiones-arquitectonicas-renderexcel.md) |
 | Vigilancias, concurrencia y entrega | [Múltiples vigilancias](multiple-watches.md) |
 | Identificadores ambiguos | [Selección explícita](vehicle-selection.md) |
 | Captura pasiva y datos | [Collector](gps-collector.md) |
 | Campañas temporales y SQLite | [Sesiones de recolección](collection-sessions.md) |
-| Integración futura | [Especificación de fase 2](widetech-official-phase2-spec.md) |
+| Adquisición central implementada, fase 2 | [Especificación de fase 2](widetech-official-phase2-spec.md) |
 | Adaptador oficial aislado, fase 1 | [Implementación y pruebas](widetech-official-phase1.md) |
 
 ## Estado de implementación
@@ -27,16 +30,21 @@ contenedor Docker con volumen de datos.
 
 **Fase 1 confirmada en `eda2606`:** adaptador oficial
 `widetech_official.py`, fixtures XML sintéticos, pruebas y documentación de fases.
-El adaptador no está conectado al servicio operacional. Los documentos locales
-`auditoria-api-oficial.md` y `prompt-integracion-api-oficial.md` permanecen fuera
-de este commit y no son necesarios para consultar esta guía. Esta
-revisión añade documentación general y corrige referencias antiguas a la interfaz
-y la persistencia; no activa ninguna fase.
+**Fase 2 implementada:** AcquisitionRuntime compone una autoridad, Coordinator
+planifica y SnapshotSource comparte datos con CLI, WhatsApp, vigilancias y collector.
+`--official` activa RenderExcel explícitamente; sin esa opción se mantiene el
+legado, sin fallback entre proveedores. El alcance operacional sigue limitado a
+Medellín. CLI y servidor son excluyentes usando el mismo directorio de estado.
+La especificación detalla conservación por vehículo, calidad y limitaciones.
+La auditoría y el prompt históricos quedan fuera del commit; no son dependencias.
 
-**Pendiente:** integración operacional de la API oficial, decisiones de identidad,
-geocercas, fechas, cobertura y coordinación de solicitudes; persistencia de
-vigilancias y recuperación de notificaciones. Un plan describe trabajo futuro,
-no acredita que ya esté implementado ni desplegado.
+**Pendiente de implementación por fases:** catálogo y consultas nacionales
+(fase 3), adaptación de campañas (fase 4), continuidad de vigilancias (fase 5)
+y validación/despliegue gradual (fase 6).
+Identidad, geocercas, zona inicial, cobertura y coordinación ya tienen decisiones
+aprobadas en el registro de referencia. La restauración de vigilancias está
+aplazada; los detalles técnicos restantes no reabren esos acuerdos. Un plan no
+acredita que el comportamiento ya esté implementado ni desplegado.
 
 ## Evidencia de validación
 
@@ -44,7 +52,9 @@ no acredita que ya esté implementado ni desplegado.
 | --- | --- |
 | Base operacional | 705 tests aprobados, registrados en la documentación de sesiones del 2 de octubre |
 | Base más adaptador oficial aislado, cierre de fase 1 | 892 tests aprobados (187 del adaptador), registrados el 8 de octubre en fase 1 |
-| API oficial real | No validada por esas pruebas offline |
+| Fase 2, ejecuciones anteriores registradas | 919 tests; después del cierre de hallazgos, 41 específicos y 933 de regresión |
+| Cierre documental y commit actual | Véase el apartado de reconciliación del documento de fase 2 para la ejecución de este encargo |
+| Pruebas manuales reportadas por el usuario, 9 de octubre | CLI por móvil/placa, por sede y arranque de vigilancia con STALE; no acreditan llegada, WhatsApp, cobertura nacional ni Docker/Ubuntu |
 
 Las cifras anteriores corresponden a ejecuciones documentadas, no a una nueva
 ejecución por editar estos textos. El documento de fase 1 explica el entorno

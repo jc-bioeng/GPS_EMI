@@ -1,12 +1,14 @@
 # WideTech oficial — fase 1 aislada
 
-**Fase 1 cerrada para avanzar a integración; proveedor oficial todavía no activado.**
+**Estado histórico al cierre de fase 1 (`eda2606`): proveedor oficial todavía no activado.**
 
-Siguiente paso documental: [especificación de fase 2](widetech-official-phase2-spec.md).
+Estado posterior implementado: [especificación de fase 2](widetech-official-phase2-spec.md).
 El encargo de cierre del 8 de octubre de 2026 prevalece sobre las propuestas
-anteriores. No se implementó fase 2 ni se hicieron nuevas peticiones reales en el cierre.
+anteriores. No se implementó fase 2 ni se hicieron nuevas peticiones reales
+en aquel cierre de fase 1. La integración posterior y sus propias pruebas se
+registran en fase 2; no se atribuyen a la evidencia histórica que sigue.
 
-El adaptador `gps_emi.providers.widetech_official` no se registra ni se importa
+En ese momento, el adaptador `gps_emi.providers.widetech_official` no se registraba ni se importaba
 desde los arranques operacionales. `WideTechClient`, `Vehicle`, CLI, WhatsApp,
 vigilancias y collector conservan su comportamiento. No hay persistencia,
 polling, caché, sleeps ni reintentos. No se usaron credenciales reales.
@@ -254,6 +256,8 @@ CLI, WhatsApp, monitoring ni analysis. Los archivos ajenos preexistentes
 `docs/prompt-integracion-api-oficial.md` se conservaron sin editar.
 
 ### Alcance de las decisiones posteriores
+
+Los acuerdos están transcritos en el [registro de decisiones arquitectónicas](decisiones-arquitectonicas-renderexcel.md). Ese registro reemplaza la necesidad de una consolidación futura mencionada abajo y separa limitaciones externas de decisiones aprobadas para siguientes fases.
 
 No está confirmado que RenderExcel utilice la envoltura funcional observada en
 GetMobileList. Esa es la limitación de envoltura que permanece abierta.

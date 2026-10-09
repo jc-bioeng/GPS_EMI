@@ -9,8 +9,9 @@ logger = logging.getLogger(__name__)
 
 class Inbox:
     def __init__(self, handler, *, capacity=100, seen_capacity=10000,
-                 ttl=7 * 24 * 60 * 60, now=None):
+                 ttl=7 * 24 * 60 * 60, now=None, on_idle=None):
         self.handler = handler
+        self.on_idle = on_idle
         self.capacity, self.seen_capacity, self.ttl = capacity, seen_capacity, ttl
         self.now = now or time.monotonic
         self.pending = deque()
@@ -55,16 +56,26 @@ class Inbox:
                 return False
             message = self.pending.popleft()
         self._process(message)
+        self._drain()
         return True
+
+    def _drain(self):
+        if self.on_idle is not None and not self.closed:
+            try:
+                self.on_idle()
+            except Exception:
+                logger.error('Pendiente no completado; sin detalles sensibles.')
 
     def _run(self):
         while True:
             with self.condition:
-                self.condition.wait_for(lambda: self.closed or bool(self.pending))
+                self.condition.wait_for(lambda: self.closed or bool(self.pending), timeout=0.2)
                 if self.closed:
                     return
-                message = self.pending.popleft()
-            self._process(message)
+                message = self.pending.popleft() if self.pending else None
+            if message is not None:
+                self._process(message)
+            self._drain()
 
     def start(self):
         with self.condition:

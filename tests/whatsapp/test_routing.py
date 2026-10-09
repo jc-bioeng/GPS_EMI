@@ -1,3 +1,4 @@
+from snapshot_fakes import snapshot_reader, ScriptedSnapshots
 from unittest.mock import Mock
 
 import pytest
@@ -62,7 +63,7 @@ def test_reset_override_help_and_invalid_site():
 
 @pytest.fixture
 def service(wa_config, messenger):
-    source = Mock()
+    source = snapshot_reader(Mock())
     source.get_vehicles.return_value = [Vehicle('433909', 'PJU886', mobile_number='AMB-20',
                                               location='Dirección', zones=[EMI_SITES[0]])]
     return MessageService(wa_config, messenger, Mock(), Mock(return_value=source))

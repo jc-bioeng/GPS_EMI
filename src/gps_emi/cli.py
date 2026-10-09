@@ -5,6 +5,7 @@ import math
 from dotenv import load_dotenv
 
 from gps_emi.config import WatchConfig
+from gps_emi.acquisition_runtime import AcquisitionRuntime
 from gps_emi.observability import configure_logging
 from gps_emi.monitoring.arrival import DESTINATIONS
 from gps_emi.monitoring.runner import watch_arrival
@@ -12,7 +13,7 @@ from gps_emi.errors import TransientAcquisitionError
 from gps_emi.formatting import format_location, format_site_inventory
 from gps_emi.notifications.base import NotificationService
 from gps_emi.notifications.console import ConsoleNotifier
-from gps_emi.providers.widetech import WideTechClient, WideTechError
+from gps_emi.errors import AcquisitionError
 from gps_emi.queries import get_vehicle_location, list_vehicles_at_site
 from gps_emi.resolution import VehicleResolutionError
 
@@ -58,7 +59,13 @@ def _execute(action, args, config) -> int:
     # Igual carga local que I1/I2, únicamente al ejecutar una operación.
     load_dotenv(dotenv_path=".env", override=False)
     configure_logging(args.log_level)
-    client = WideTechClient()
+    if getattr(args, '_runtime', None) is None:
+        args._runtime = AcquisitionRuntime(official=args.official, interval=args.interval,
+                                           max_backoff=args.acquisition_max_backoff)
+        args._runtime.start()
+    client = args._runtime.source
+    if client.coordinator.peek() is None:
+        print('Adquisición GPS inicializando; esperando el primer snapshot válido.')
     if action == "watch":
         if args.destination is not None:
             logger.warning("--destination está obsoleto: conserva el modo de una sola sede de I2. "
@@ -67,14 +74,18 @@ def _execute(action, args, config) -> int:
                      initial_backoff=config.initial_backoff, max_backoff=config.max_backoff,
                      stale_warning_seconds=config.stale_warning_seconds)
     if action == "location":
+        client = client.bind(client.wait())
         print(format_location(get_vehicle_location(client, identifier, config)))
     else:
+        client = client.bind(client.wait())
         print(format_site_inventory(list_vehicles_at_site(client, site, config)))
     return 0
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="GPS EMI — Vigilancia y consultas")
+    parser.add_argument('--official', action='store_true', help='Activar RenderExcel explícitamente')
+    parser.add_argument('--acquisition-max-backoff', type=positive_interval, default=300)
     parser.add_argument("--action", choices=("watch", "location", "site"),
                         help="Operación directa; sin argumentos se muestra el menú")
     parser.add_argument("--identifier", "--plate", dest="identifier",
@@ -85,9 +96,9 @@ def main(argv=None) -> int:
     parser.add_argument("--interval", type=positive_interval, default=30.0,
                         help="Segundos entre consultas (predeterminado: 30)")
     parser.add_argument("--initial-backoff", type=positive_interval, default=5.0,
-                        help="Espera inicial tras fallo transitorio (segundos: 5)")
+                        help="Compatibilidad: el backoff central inicia en --interval")
     parser.add_argument("--max-backoff", type=positive_interval, default=30.0,
-                        help="Espera máxima tras fallos consecutivos (segundos: 30)")
+                        help="Compatibilidad: use --acquisition-max-backoff para adquisición")
     parser.add_argument("--stale-warning-seconds", type=float, default=300.0,
                         help="Advertir STALE si report_age supera este umbral (300)")
     parser.add_argument("--log-level", choices=("DEBUG", "INFO", "WARNING", "ERROR"), default=None)
@@ -128,9 +139,9 @@ def main(argv=None) -> int:
         logger.info("Operación cancelada.")
         return 130
     except TransientAcquisitionError:
-        logger.error("Fallo temporal de adquisición. La consulta puntual no se reintenta; vuelva a consultar.")
+        logger.error("No se obtuvo una adquisición dentro del tiempo disponible; vuelva a consultar.")
         return 1
-    except WideTechError as error:
+    except AcquisitionError as error:
         logger.error("%s", error.public_message)
         return 1
     except (VehicleResolutionError, ValueError) as error:
@@ -139,6 +150,9 @@ def main(argv=None) -> int:
     except Exception:
         logger.error("No se pudo completar la operación; no se muestran detalles internos.")
         return 1
+    finally:
+        if getattr(args, '_runtime', None) is not None:
+            args._runtime.close()
 
 
 if __name__ == "__main__":

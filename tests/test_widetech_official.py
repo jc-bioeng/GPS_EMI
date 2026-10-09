@@ -390,12 +390,16 @@ def test_slash_date_and_finite_exponent():
 
 
 def test_import_does_not_load_dotenv(monkeypatch):
-    import importlib
+    import importlib.util
+    import sys
     import dotenv
     def forbidden(*args, **kwargs):
         pytest.fail("Import must not read .env")
     monkeypatch.setattr(dotenv, "load_dotenv", forbidden)
-    importlib.reload(wt)
+    spec = importlib.util.spec_from_file_location('gps_emi.providers._import_probe', wt.__file__)
+    probe = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, probe)
+    spec.loader.exec_module(probe)
 
 
 @pytest.mark.parametrize("codes,expected", [

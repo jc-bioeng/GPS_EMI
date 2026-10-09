@@ -1,3 +1,4 @@
+from snapshot_fakes import snapshot_reader, ScriptedSnapshots
 from datetime import datetime
 from unittest.mock import Mock
 import uuid
@@ -28,7 +29,8 @@ def client(monkeypatch):
     source.get_vehicles.return_value = [Vehicle('433909', 'PJU886', datetime(2026, 9, 17, 12, 34),
                                                location='Dirección de prueba', speed=0, gps_fix=1,
                                                mobile_number='AMB-20', zones=[EMI_SITES[0]])]
-    monkeypatch.setattr(cli, 'WideTechClient', lambda: source)
+    snapshot_reader(source)
+    monkeypatch.setattr(cli, 'AcquisitionRuntime', lambda **kwargs: Mock(source=source))
     return source
 
 

@@ -1,3 +1,4 @@
+from snapshot_fakes import ScriptedSnapshots, publish
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from dataclasses import replace
@@ -22,7 +23,7 @@ NOW = datetime(2026, 10, 2, 17, tzinfo=timezone.utc)
 @pytest.fixture
 def clock(monkeypatch):
     value = [NOW]
-    for module in ('gps_emi.analysis.sessions', 'gps_emi.collector', 'gps_emi.monitoring.fleet_polling'):
+    for module in ('gps_emi.analysis.sessions', 'gps_emi.collector'):
         monkeypatch.setattr(module + '.acquisition_now', lambda: value[0])
     monkeypatch.setattr('gps_emi.collector.configure_logging', lambda: None)
     return value
@@ -163,17 +164,17 @@ def test_one_acquisition_for_session_and_watches_completion_keeps_watches(store,
     source = Mock()
     source.get_vehicles.return_value = [vehicle()]
     manager = WatchManager(Mock())
-    polling = FleetPolling(lambda:source, manager, collector=collector, autostart=False)
-    assert polling.cycle() == 30  # Una sesión sola usa el coordinador existente.
+    polling = FleetPolling(lambda: ScriptedSnapshots(source, utcnow=lambda: __import__('gps_emi.analysis.sessions', fromlist=['acquisition_now']).acquisition_now()), manager, collector=collector, autostart=False)
+    assert publish(polling) is None  # Una sesión sola usa el coordinador existente.
     assert source.get_vehicles.call_count == 1
     polling.request_watch('owner', 'TEST', 'target')
-    polling.cycle()
+    publish(polling)
     assert source.get_vehicles.call_count == 2
     assert manager.has_active()
     clock[0] += timedelta(seconds=61)
     collector.refresh()
     assert not collector.active
-    polling.cycle()
+    publish(polling)
     assert source.get_vehicles.call_count == 3 and manager.has_active()
     polling.close()
 
@@ -184,10 +185,10 @@ def test_terminal_provider_error_does_not_spin_for_session(store):
     collector.refresh()
     source = Mock()
     source.get_vehicles.side_effect = SessionExpiredError()
-    polling = FleetPolling(lambda:source, WatchManager(Mock()), collector=collector, autostart=False)
-    assert polling.cycle() is None
+    polling = FleetPolling(lambda: ScriptedSnapshots(source, utcnow=lambda: __import__('gps_emi.analysis.sessions', fromlist=['acquisition_now']).acquisition_now()), WatchManager(Mock()), collector=collector, autostart=False)
+    assert publish(polling) is None
     assert not polling.active
-    assert polling.cycle() is None
+    assert publish(polling) is None
     source.get_vehicles.assert_called_once()
 
 

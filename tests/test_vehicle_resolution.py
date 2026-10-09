@@ -1,3 +1,4 @@
+from snapshot_fakes import ScriptedSnapshots
 from dataclasses import replace
 from datetime import datetime, timedelta
 from unittest.mock import Mock
@@ -8,7 +9,7 @@ from gps_emi import cli
 from gps_emi.models import Vehicle
 from gps_emi.monitoring.arrival import DESTINATIONS
 from gps_emi.notifications.console import ConsoleNotifier
-from gps_emi.providers.widetech import WideTechClient, normalize_vehicle, parse
+from gps_emi.providers.widetech import LegacyWideTechTransport as WideTechClient, normalize_vehicle, parse
 from gps_emi.resolution import AmbiguousVehicleError, VehicleNotFoundError, find_vehicle
 
 
@@ -68,7 +69,7 @@ def test_other_fleet_cannot_be_selected(monkeypatch, identifier, caplog):
     with pytest.raises(VehicleNotFoundError):
         find_vehicle(client.get_vehicles(), identifier)
     notifier = Mock()
-    assert cli.watch(client, identifier, DESTINATIONS[0], 30, notifier, Mock()) == 1
+    assert cli.watch(ScriptedSnapshots(client), identifier, DESTINATIONS[0], 30, notifier, Mock()) == 1
     notifier.send_arrival.assert_not_called()
     assert 'No se encontró el móvil' in caplog.text
 
@@ -82,14 +83,15 @@ def test_monitoring_by_mobile_keeps_transition_and_original_event(plate, sequenc
                     for index, inside in enumerate(sequence)]
     client, notifier, sleep = Mock(), Mock(), Mock()
     client.get_vehicles.side_effect = [[observation] for observation in observations]
-    assert cli.watch(client, ' amb-20 ', DESTINATIONS[0], 30, notifier, sleep) == 0
+    assert cli.watch(ScriptedSnapshots(client), ' amb-20 ', DESTINATIONS[0], 30, notifier, sleep) == 0
     notifier.send_arrival.assert_called_once()
     event = notifier.send_arrival.call_args.args[0]
-    assert event.vehicle is observations[-1]
+    assert event.vehicle == observations[-1]
+    assert event.vehicle is not observations[-1]  # Copia del snapshot compartido.
     assert event.vehicle.plate == plate
     assert event.vehicle.mobile_number == 'AMB-20'
     assert client.get_vehicles.call_count == len(sequence)
-    assert sleep.call_count == len(sequence) - 1
+    sleep.assert_not_called()
 
 
 def test_ambiguous_cli_stops_before_creating_monitor(monkeypatch, caplog):
@@ -97,7 +99,7 @@ def test_ambiguous_cli_stops_before_creating_monitor(monkeypatch, caplog):
     client.get_vehicles.return_value = [Vehicle('1', 'DEU942', mobile_number='AMB-20'),
                                       Vehicle('2', 'OTHER', mobile_number='AMB-20')]
     monkeypatch.setattr('gps_emi.monitoring.runner.ArrivalMonitor', monitor)
-    assert cli.watch(client, 'AMB-20', DESTINATIONS[0], 30, notifier, Mock()) == 1
+    assert cli.watch(ScriptedSnapshots(client), 'AMB-20', DESTINATIONS[0], 30, notifier, Mock()) == 1
     assert 'identificador es ambiguo' in caplog.text
     monitor.assert_not_called()
     notifier.send_arrival.assert_not_called()
@@ -143,10 +145,11 @@ def test_observed_vehicle_monitor_and_notification(identifier, observed_amb20_pa
     inside = replace(vehicle, zones=[DESTINATIONS[0]], gps_timestamp=datetime(2026, 9, 17, 12, 31))
     client, notifier = Mock(), Mock()
     client.get_vehicles.side_effect = [[vehicle], [inside]]
-    assert cli.watch(client, identifier, DESTINATIONS[0], 30, notifier, Mock()) == 0
+    assert cli.watch(ScriptedSnapshots(client), identifier, DESTINATIONS[0], 30, notifier, Mock()) == 0
     notifier.send_arrival.assert_called_once()
     event = notifier.send_arrival.call_args.args[0]
-    assert event.vehicle is inside
+    assert event.vehicle == inside
+    assert event.vehicle is not inside
     assert event.vehicle.plate == 'PJU886'
     assert event.vehicle.mobile_number == 'AMB-20'
     ConsoleNotifier().send_arrival(event)

@@ -1,3 +1,4 @@
+from snapshot_fakes import ScriptedSnapshots, publish
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -28,7 +29,7 @@ def setup_fleet(rows, config=None):
     source.get_vehicles.side_effect = rows
     manager = WatchManager(notify, config, now=lambda: BASE + timedelta(minutes=10))
     created, errors = Mock(), Mock()
-    polling = FleetPolling(lambda: source, manager, config=config, autostart=False,
+    polling = FleetPolling(lambda: ScriptedSnapshots(source), manager, config=config, autostart=False,
                            on_created=created, on_error=errors)
     return manager, polling, source, notify, created, errors
 
@@ -43,12 +44,12 @@ def test_four_snapshots_three_independent_watches():
     for v in (a,b,c):
         polling.request_watch('A', v.mobile_number, 'destination-A')
     for index, expected in enumerate((0,1,2,3)):
-        polling.cycle()
+        publish(polling)
         assert notify.call_count == expected
         assert len(manager.get_active_watches('A')) == 3-expected
         assert source.get_vehicles.call_count == index+1
     assert not polling.active
-    assert polling.cycle() is None
+    assert publish(polling) is None
     assert source.get_vehicles.call_count == 4
     assert {call.args[0].notification_target for call in notify.call_args_list} == {'destination-A'}
     assert [call.args[1].vehicle.vehid for call in notify.call_args_list] == ['20','18','96']
@@ -81,7 +82,7 @@ def test_owner_isolation_duplicates_and_independent_monitors():
 def test_resolve_once_then_follow_vehid(identifier):
     manager, polling, source, notify, _, _ = setup_fleet([[vehicle()], [replace(vehicle(seconds=30, sites=EMI_SITES), plate='NEW', mobile_number='NEW')]])
     polling.request_watch('A', identifier, 'target')
-    polling.cycle(); polling.cycle()
+    publish(polling); publish(polling)
     event = notify.call_args.args[1]
     assert event.vehicle.vehid == '1' and event.vehicle.plate == 'NEW'
     assert event.sites == EMI_SITES and event.site is None
@@ -94,9 +95,9 @@ def test_first_inside_and_site_change_need_outside(first, second):
         [vehicle(sites=first)], [vehicle(seconds=1,sites=second)],
         [vehicle(seconds=2)], [vehicle(seconds=3,sites=first)]])
     polling.request_watch('A','AMB-1','target')
-    polling.cycle(); polling.cycle()
+    publish(polling); publish(polling)
     notify.assert_not_called()
-    polling.cycle(); polling.cycle()
+    publish(polling); publish(polling)
     notify.assert_called_once()
 
 
@@ -108,7 +109,7 @@ def test_first_inside_and_site_change_need_outside(first, second):
 def test_bad_timestamp_only_affects_its_watch(bad,status):
     manager, polling, _, notify, _, _ = setup_fleet([[vehicle(),vehicle('2')], [bad,vehicle('2',30,EMI_SITES)]])
     polling.request_watch('A','AMB-1','target'); polling.request_watch('A','AMB-2','target')
-    polling.cycle(); polling.cycle()
+    publish(polling); publish(polling)
     first, second = manager.list_watches('A')
     assert first.status == WatchStatus.ACTIVE and first.last_assessment.status == status
     assert second.status == WatchStatus.COMPLETED
@@ -119,16 +120,16 @@ def test_bad_timestamp_only_affects_its_watch(bad,status):
 def test_absent_or_ambiguous_vehicle_keeps_watch(missing):
     manager, polling, _, notify, _, _ = setup_fleet([[vehicle()], missing, [vehicle(seconds=30,sites=EMI_SITES)]])
     polling.request_watch('A','AMB-1','target')
-    polling.cycle(); polling.cycle()
+    publish(polling); publish(polling)
     assert manager.list_watches('A')[0].status == WatchStatus.ACTIVE
-    polling.cycle()
+    publish(polling)
     notify.assert_called_once()
 
 
 def test_stale_and_gps_fix_zero_still_process():
     manager, polling, _, notify, _, _ = setup_fleet([[vehicle(gps_fix=0)], [vehicle(seconds=1,sites=EMI_SITES,gps_fix=0)]])
     polling.request_watch('A','AMB-1','target')
-    polling.cycle(); polling.cycle()
+    publish(polling); publish(polling)
     watch = manager.list_watches('A')[0]
     assert watch.last_assessment.is_stale(300)
     assert watch.last_observation.gps_fix == 0
@@ -137,26 +138,31 @@ def test_stale_and_gps_fix_zero_still_process():
 
 def test_global_backoff_recovery_and_terminal_error(caplog):
     manager, polling, source, notify, _, errors = setup_fleet([
-        [vehicle(),vehicle('2')], TransientAcquisitionError(), TransientAcquisitionError(),
-        [vehicle(seconds=30),vehicle('2',30)], SessionExpiredError()], WatchConfig(30,5,8,300))
-    polling.request_watch('A','AMB-1','target'); polling.request_watch('A','AMB-2','target')
-    assert polling.cycle() == 30
-    assert polling.cycle() == 5 and polling.cycle() == 8
+        [vehicle(), vehicle('2')], TransientAcquisitionError(), TransientAcquisitionError(),
+        [vehicle(seconds=30), vehicle('2',30)], SessionExpiredError()])
+    polling.request_watch('A', 'AMB-1', 'target')
+    polling.request_watch('A', 'AMB-2', 'target')
+    publish(polling)
+    publish(polling)
+    assert polling.coordinator.backoff == 30
+    publish(polling)
+    assert polling.coordinator.backoff == 60
     assert len(manager.get_active_watches('A')) == 2
-    assert polling.cycle() == 30 and polling.next_backoff == 5
+    publish(polling)
+    assert polling.coordinator.backoff == 30
     assert 'recuperada' in caplog.text
-    assert polling.cycle() is None
+    publish(polling)
+    assert polling.coordinator.blocked
     assert all(w.status == WatchStatus.FAILED for w in manager.list_watches('A'))
     assert not manager.has_active()
     notify.assert_not_called()
 
-
 def test_pending_creation_survives_transient_failure():
     manager, polling, _, _, created, _ = setup_fleet([TransientAcquisitionError(), [vehicle()]])
     polling.request_watch('A','AMB-1','target')
-    polling.cycle()
+    publish(polling)
     created.assert_not_called()
-    polling.cycle()
+    publish(polling)
     created.assert_called_once()
 
 
@@ -205,7 +211,7 @@ def test_cancellation_and_creation_during_acquisition():
         assert release.wait(timeout=2)
         return [vehicle(seconds=30,sites=EMI_SITES),vehicle('2')]
     source.get_vehicles.side_effect = acquire
-    thread = Thread(target=polling.cycle)
+    thread = Thread(target=lambda: publish(polling))
     thread.start()
     try:
         assert entered.wait(timeout=1)
@@ -215,7 +221,7 @@ def test_cancellation_and_creation_during_acquisition():
         release.set(); thread.join(timeout=1)
     assert not thread.is_alive()
     notify.assert_not_called()
-    created.assert_not_called()
+    created.assert_called_once()  # La alta comparte la adquisición en curso.
     polling.cycle()
     assert len(manager.get_active_watches('A')) == 1
 
@@ -239,24 +245,26 @@ def test_delivery_failure_does_not_prevent_other_watch_notification():
 
 def test_shutdown_during_acquisition_discards_snapshot():
     manager, polling, source, notify, _, _ = setup_fleet([])
-    entered,release = Event(),Event()
+    entered, release = Event(), Event()
     def acquire():
         entered.set()
-        assert release.wait(timeout=2)
+        assert release.wait(timeout=3)
         return [vehicle()]
     source.get_vehicles.side_effect = acquire
-    polling.autostart = True
-    polling.request_watch('A','AMB-1','target')
+    polling.request_watch('A', 'AMB-1', 'target')
+    central = polling.coordinator
+    central.start()
     try:
-        assert entered.wait(timeout=1)
-        assert not polling.close(timeout=0)
+        assert entered.wait(timeout=3)
+        assert not central.close(timeout=0)
+        assert polling.close(timeout=0)
     finally:
         release.set()
-        assert polling.close(timeout=1)
+        assert central.close(timeout=3)
+    assert central.peek() is None
     assert not manager.list_watches('A')
-    assert not polling.request_watch('A','AMB-1','target')
+    assert not polling.request_watch('A', 'AMB-1', 'target')
     notify.assert_not_called()
-
 
 def test_local_observation_failure_isolated():
     manager = WatchManager(Mock(return_value=True), now=lambda: BASE)
@@ -271,32 +279,31 @@ def test_local_observation_failure_isolated():
 @pytest.mark.parametrize('recoverable', [False,True])
 def test_polling_shutdown_interrupts_interval_and_backoff(recoverable):
     manager, polling, source, _, _, _ = setup_fleet([])
-    source.get_vehicles.side_effect = TransientAcquisitionError() if recoverable else None
-    source.get_vehicles.return_value = [vehicle()]
     entered = Event()
-    original_wait = polling.stop_event.wait
-    delays = []
-    def wait(seconds):
-        delays.append(seconds)
+    def acquire():
         entered.set()
-        return original_wait(seconds)
-    polling.stop_event.wait = wait
+        if recoverable:
+            raise TransientAcquisitionError()
+        return [vehicle()]
+    source.get_vehicles.side_effect = acquire
     polling.autostart = True
-    polling.request_watch('A','AMB-1','target')
+    polling.request_watch('A', 'AMB-1', 'target')
+    polling.coordinator.start()
     try:
-        assert entered.wait(timeout=1)
+        assert entered.wait(timeout=3)
     finally:
+        polling.coordinator.request_stop()
         assert polling.close(timeout=1)
-    assert delays == [5 if recoverable else 30]
+        assert polling.coordinator.close(timeout=1)
+    assert source.get_vehicles.call_count == 1
     assert not polling.active
-
 
 def test_recovery_preserves_both_outside_states_until_arrival():
     manager, polling, source, notify, _, _ = setup_fleet([
         [vehicle(),vehicle('2')], TransientAcquisitionError(),
         [vehicle(seconds=1,sites=EMI_SITES[:1]),vehicle('2',1,EMI_SITES[1:])]])
     polling.request_watch('A','AMB-1','target'); polling.request_watch('A','AMB-2','target')
-    polling.cycle();polling.cycle();polling.cycle()
+    publish(polling);publish(polling);publish(polling)
     assert notify.call_count == 2
     assert source.get_vehicles.call_count == 3
     assert not manager.has_active()
@@ -310,7 +317,7 @@ def test_terminal_error_announces_only_active_watches_and_pending():
     polling.request_watch('B','AMB-3','target-B')
     terminal = Mock()
     polling.on_terminal = terminal
-    polling.cycle()
+    publish(polling)
     terminal.assert_called_once()
     assert terminal.call_args.args[0].watch_id == active.watch_id
     assert errors.call_args.args[0].owner_id == 'B'

@@ -82,14 +82,14 @@ def test_http_contract_and_fleet_filter(monkeypatch):
         assert kwargs['allow_redirects'] is False
         return response(SAMPLE)
     monkeypatch.setattr(wt.requests, 'post', post)
-    vehicles = wt.WideTechClient().get_vehicles()
+    vehicles = wt.LegacyWideTechTransport().get_vehicles()
     assert [v.plate for v in vehicles] == ['ABC123']
     assert [v.mobile_number for v in vehicles] == ['AMB-106']
 
 
 def test_missing_authentication():
     with pytest.raises(wt.WideTechError, match='Falta la variable'):
-        wt.WideTechClient().get_vehicles()
+        wt.LegacyWideTechTransport().get_vehicles()
 
 
 def test_empirically_observed_identifier_mapping(observed_amb20_payload):
@@ -126,7 +126,7 @@ def test_safe_and_actionable_errors(monkeypatch, failure, expected):
         }[failure])
     monkeypatch.setattr(wt.requests, 'post', post)
     with pytest.raises(wt.WideTechError) as caught:
-        wt.WideTechClient().get_vehicles()
+        wt.LegacyWideTechTransport().get_vehicles()
     assert marker not in str(caught.value)
     assert caught.value.__context__ is None
     assert expected in str(caught.value)

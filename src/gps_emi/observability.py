@@ -73,8 +73,9 @@ metrics = Metrics()
 
 
 class SummaryReporter:
-    def __init__(self, watch_count=None):
+    def __init__(self, watch_count=None, acquisition_health=None):
         self.watch_count = watch_count
+        self.acquisition_health = acquisition_health
         try:
             self.interval = max(1, int(os.environ.get('GPS_EMI_LOG_SUMMARY_SECONDS', '300')))
         except ValueError:
@@ -89,6 +90,8 @@ class SummaryReporter:
         while not self.stop.wait(self.interval):
             if self.watch_count is not None:
                 metrics.update(active_watches=self.watch_count())
+            if self.acquisition_health is not None:
+                metrics.update(**{'acquisition_'+k: v for k, v in self.acquisition_health().items()})
             metrics.summary()
 
     def close(self):

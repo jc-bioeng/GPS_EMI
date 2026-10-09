@@ -7,12 +7,12 @@ Antes: el adaptador WhatsApp reservaba un booleano `active` global y arrancaba u
 Webhook firmado → Inbox → MessageService → solicitudes de alta
                                       → listar/cancelar por owner_id
                                                │
-                       FleetPolling (un hilo compartido)
+                       AcquisitionRuntime (exclusión local)
                                                │
-                 WideTechClient.get_vehicles() / LoadDataLog
-                        una adquisición por ciclo
+                       Coordinator (único planificador HTTP)
                                                │
-                           snapshot de flota filtrada
+                       SnapshotSource → FleetPolling
+                       distribución de cada publicación
                              │                 │
                       resolver altas       WatchManager
                                                │
@@ -50,7 +50,8 @@ ACTIVE por owner+VEHID devuelve la Watch existente y no cambia su destino.
 El adaptador `whatsapp.service.WatchManager` mantiene la interfaz de arranque/cierre
 del servidor y solo conecta callbacks/presentación con el gestor de dominio.
 No construye observaciones ni implementa geocercas. La consola sigue usando el
-WatchRunner existente; no participa en el polling compartido del servidor.
+WatchRunner existente y consume SnapshotSource del mismo diseño de autoridad.
+CLI y servidor no pueden ejecutar simultáneamente en esta instalación.
 
 ## Polling y resiliencia
 
@@ -62,7 +63,9 @@ sesión de recolección activa, el hilo espera y no consulta GPSpace. Una sesió
 de recolección también puede mantener el polling, aun sin vigilancias.
 
 Timeouts/conexión/HTTP recuperables conservan Watches y altas pendientes, con el
-backoff exponencial acotado de WatchConfig; recuperación restablece el intervalo.
+backoff progresivo acotado de AcquisitionConfig en Coordinator. La recuperación
+reduce gradualmente el backoff; WatchConfig ya no planifica adquisiciones.
+El intervalo base es 30 s configurable y se respeta Retry-After.
 Un error terminal, incluida sesión expirada, marca las activas FAILED y comunica
 el fallo; después de reparar la sesión hay que solicitar las vigilancias otra vez.
 No se implementan login, renovación ni bypass de Turnstile.
@@ -70,14 +73,18 @@ No se implementan login, renovación ni bypass de Turnstile.
 La ausencia o duplicidad de un VEHID omite solo esa observación y conserva la Watch.
 No se interpreta como salida ni se penaliza a otras Watches con backoff por vehículo.
 El validador existente rechaza timestamps duplicados, fuera de orden, ausentes o
-incompatibles en zona horaria de forma independiente. STALE y GPSFix=0 siguen
-siendo diagnósticos y no descartan observaciones nuevas. Zones y ArrivalMonitor
+incompatibles en zona horaria de forma independiente. STALE permanece diagnóstico
+transitoriamente hasta fase 5, donde está aprobado impedir llegadas con datos
+antiguos. GPSFix=0 mantiene su política diagnóstica independiente. Zones y ArrivalMonitor
 mantienen sus reglas exactas: primera lectura dentro no es llegada, y pasar de
 sede a sede sin observar exterior tampoco lo es.
 
-Las consultas puntuales de ubicación/inventario conservan su adquisición propia.
-La garantía de un snapshot por ciclo corresponde a las vigilancias y al collector
-del mismo coordinador. No hay un límite global entre consultas, CLI y procesos.
+Consultas puntuales, CLI, vigilancias y collector comparten SnapshotSource y
+Coordinator; no adquieren por separado. FleetPolling distribuye sin HTTP ni
+planificador propio. El estado anterior conservado por calidad no se entrega
+como observación nueva a vigilancias/collector. HostLease impone exclusión local
+entre CLI y servidor con el mismo GPS_EMI_STATE_DIR. No coordina otros hosts.
+No hay IPC; véase [fase 2](widetech-official-phase2-spec.md).
 
 ## Concurrencia y notificación
 
@@ -127,12 +134,12 @@ nuevos selectores nativos. Firma, allowlist, deduplicación y ventana se mantien
 Ejemplo de alta:
 
 ```text
-Usuario: VIGILAR AMB-20
-Bot: 🔎 Buscando AMB-20...
+Usuario: VIGILAR SYNTHETIC-MOBILE-A
+Bot: 🔎 Buscando SYNTHETIC-MOBILE-A...
 
 Bot: 👀 Vigilancia iniciada
 
-AMB-20 · PJU886
+SYNTHETIC-MOBILE-A · SYNTHETIC-PLATE-A
 
 Te avisaré cuando llegue a una sede EMI.
 Escribe VIGILANCIAS para gestionar tus vigilancias.
@@ -164,13 +171,19 @@ por propietario, resiliencia, cierre y fallos de entrega. Todas son offline.
 
 ## Deuda explícita
 
-**Las vigilancias activas se pierden al reiniciar el proceso.**
+**Las vigilancias activas se pierden al reiniciar el proceso por decisión aprobada.**
 Almacenamiento e historial in-memory, sin límite/retención persistente; un solo
-proceso; persistencia futura pendiente. Se admiten propietarios autorizados
+proceso; restauración aplazada deliberadamente. Se admiten propietarios autorizados
 distintos con aislamiento de sus vigilancias, sin administración persistente de
 usuarios ni roles.
-No hay coordinación con otra instancia o con una vigilancia de consola aparte.
+La exclusión local impide otra autoridad cooperante con el mismo directorio de
+estado; no coordina instalaciones o hosts distintos.
 La cola de altas pendientes y el historial consumen memoria durante la sesión.
-Quedan pendientes reintentos durables, seguimiento de entrega y recuperación de
-eventos tras una caída. No hay validación real de este incremento hasta ejecutar
-la prueba manual del usuario; pytest no sustituye esa aceptación.
+La no restauración de vigilancias es una decisión aprobada (VIG-08/APL-02),
+no un requisito olvidado. Continuidad y recuperación de fase 5 están aprobadas
+pero no implementadas aquí. Reintentos durables y seguimiento de entrega no
+se incorporan en este cierre. Las altas pendientes tienen límite y TTL; el
+historial de vigilancias permanece en memoria.
+El usuario reportó arranque CLI con STALE el 9 de octubre; eso no demuestra
+llegada ni entrega WhatsApp. La prueba manual anterior es una guía histórica,
+no una validación ejecutada por este cierre; WhatsApp se aplazó para servidor.

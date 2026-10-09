@@ -85,7 +85,8 @@ class WatchManager:
 
     def start_selected(self, context, vehicle_id):
         return self.polling.request_watch(context.owner_id, context.original_identifier,
-                                          context.notification_target, vehicle_id=vehicle_id)
+                                          context.notification_target, vehicle_id=vehicle_id,
+                                          context_id=self.selections.current(context.owner_id) if self.selections else None)
 
     @property
     def active(self):
@@ -111,6 +112,9 @@ class WatchManager:
     def cancel(self, owner_id, watch_id):
         return self.manager.cancel_watch(owner_id, watch_id)
 
+    def cancel_pending(self, owner_id):
+        self.polling.cancel_pending(owner_id)
+
 
 class MessageService:
     """Consumido por el worker; las vigilancias comparten otro hilo de polling."""
@@ -125,6 +129,49 @@ class MessageService:
         self.watches.selections = self.selections
         self.watches.selection_handler = self._watch_selection
         self.watches.cancel_handler = self._set_cancel_choices
+        self.snapshot_source = None
+        self.pending_queries = {}
+
+    def _query(self, sender, operation, argument, generation):
+        """Queue only; completion is drained by the single Inbox worker."""
+        if self.snapshot_source is None:
+            self.snapshot_source = self.source_factory()
+        coordinator = self.snapshot_source.coordinator
+        if len(self.pending_queries) >= coordinator.config.capacity and sender not in self.pending_queries:
+            self._feedback(sender, fmt.GPS_ERROR)
+            return
+        future = coordinator.request()
+        self.pending_queries[sender] = (generation, operation, argument, future)
+        if not future.done():
+            self._feedback(sender, 'La adquisición GPS está inicializando. Tu consulta queda pendiente por tiempo limitado.')
+        self.drain_pending()
+
+    def drain_pending(self):
+        for sender, (generation, operation, argument, future) in list(self.pending_queries.items()):
+            if self.selections.current(sender) != generation:
+                future.cancel()
+                self.pending_queries.pop(sender, None)
+                continue
+            if not future.done():
+                continue
+            self.pending_queries.pop(sender, None)
+            try:
+                source = self.snapshot_source.bind(future.result())
+                if operation == 'site':
+                    response = fmt.format_site(list_vehicles_at_site(source, argument, self.watch_config))
+                else:
+                    query = get_vehicle_location_by_id if operation == 'selected' else get_vehicle_location
+                    response = fmt.format_location(query(source, argument, self.watch_config))
+            except AmbiguousVehicleError as error:
+                if operation == 'location' and error.candidates:
+                    self._offer_selection(sender, SelectionOperation.LOCATION, argument, error.candidates, sender, generation)
+                    continue
+                response = identifier_error('selected_unavailable' if operation == 'selected' else 'ambiguous', argument)
+            except VehicleNotFoundError:
+                response = identifier_error('selected_unavailable' if operation == 'selected' else 'not_found', argument)
+            except Exception:
+                response = fmt.GPS_ERROR
+            self._feedback(sender, response)
 
     def _set_cancel_choices(self, sender, watches):
         self.vehicle_choices.pop(sender, None)
@@ -187,6 +234,10 @@ class MessageService:
             self.vehicle_choices.pop(sender, None)
         generation = (self.selections.begin(sender)
                       if command.action not in ('vehicle_select', 'vehicle_page') else None)
+        if generation is not None:
+            previous = self.pending_queries.pop(sender, None)
+            if previous is not None:
+                previous[3].cancel()
         if command.action not in ('cancel', 'cancel_id'):
             self.cancel_choices.pop(sender, None)
         logger.info("Comando reconocido: %s.", command.action)
@@ -195,6 +246,7 @@ class MessageService:
                 self.messenger.menu(sender)
                 return
             elif command.action == 'cancel_operation':
+                self.watches.cancel_pending(sender)
                 response = 'Operación cancelada. Las vigilancias activas no se modificaron.'
             elif command.action in ('vehicle_select', 'vehicle_page'):
                 parts = command.argument.split(':')
@@ -213,12 +265,8 @@ class MessageService:
                 context, vehicle_id = self.selections.consume(sender, selection_id, choice)
                 if context.operation == SelectionOperation.LOCATION:
                     self._feedback(sender, '🔎 Consultando el registro seleccionado...')
-                    try:
-                        result = get_vehicle_location_by_id(self.source_factory(), vehicle_id, self.watch_config)
-                    except (VehicleNotFoundError, AmbiguousVehicleError):
-                        response = identifier_error('selected_unavailable', '')
-                    else:
-                        response = fmt.format_location(result)
+                    self._query(sender, 'selected', vehicle_id, self.selections.current(sender))
+                    return
                 elif context.operation == SelectionOperation.CREATE_WATCH:
                     self._feedback(sender, '🔎 Buscando el registro seleccionado...')
                     if self.watches.start_selected(context, vehicle_id):
@@ -268,24 +316,14 @@ class MessageService:
                 response = "⚠️ El servicio de vigilancias está detenido."
             elif command.action == "location":
                 self._feedback(sender, f"🔎 Consultando {command.argument}...")
-                result = get_vehicle_location(self.source_factory(), command.argument, self.watch_config)
-                logger.info("Consulta de ubicación ejecutada.")
-                response = fmt.format_location(result)
+                self._query(sender, 'location', command.argument, generation)
+                return
             elif command.action == "site":
                 self._feedback(sender, f"🔎 Consultando ambulancias en {fmt.site_name(command.argument)}...")
-                result = list_vehicles_at_site(self.source_factory(), command.argument, self.watch_config)
-                logger.info("Consulta de sede ejecutada.")
-                response = fmt.format_site(result)
+                self._query(sender, 'site', command.argument, generation)
+                return
             else:
                 response = fmt.HELP
-        except VehicleNotFoundError:
-            response = identifier_error("not_found", command.argument)
-        except AmbiguousVehicleError as error:
-            if command.action == 'location' and error.candidates:
-                self._offer_selection(sender, SelectionOperation.LOCATION, command.argument,
-                                      error.candidates, sender, generation)
-                return
-            response = identifier_error("ambiguous", command.argument)
         except SelectionError as error:
             response = ('La selección anterior expiró. Realiza la consulta nuevamente.' if error.code == 'expired'
                         else 'La selección no es válida o ya fue utilizada. Realiza la consulta nuevamente.')

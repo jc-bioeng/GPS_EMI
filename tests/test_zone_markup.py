@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from gps_emi.providers.widetech import WideTechClient, zone_list
+from gps_emi.providers.widetech import LegacyWideTechTransport as WideTechClient, zone_list
 from gps_emi.monitoring.watches import WatchManager, WatchStatus
 from gps_emi.queries import list_vehicles_at_site
 from gps_emi.sites import EMI_SITES

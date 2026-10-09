@@ -1,12 +1,11 @@
 """Orquestación de una vigilancia; nunca convierte fallos en observaciones."""
-from datetime import datetime
 import logging
-import time
 from typing import Protocol
 
 from gps_emi.config import WatchConfig
+from gps_emi.acquisition import SnapshotSource
 from gps_emi.clock import operational_now
-from gps_emi.errors import AcquisitionError, TransientAcquisitionError
+from gps_emi.errors import AcquisitionError
 from gps_emi.models import Vehicle
 from gps_emi.monitoring.arrival import ArrivalMonitor, DESTINATIONS
 from gps_emi.monitoring.observation import (
@@ -30,7 +29,7 @@ def local_now():
 
 
 class WatchRunner:
-    def __init__(self, client: VehicleSource, identifier: str, destination: str | None,
+    def __init__(self, client: SnapshotSource, identifier: str, destination: str | None,
                  notifier: NotificationService, config: WatchConfig | None = None,
                  *, sleep=None, now=None, on_resolved=None, stop_event=None):
         if not identifier.strip():
@@ -42,7 +41,7 @@ class WatchRunner:
         self.destination = destination
         self.notifier = notifier
         self.config = config or WatchConfig()
-        self.sleep = sleep if sleep is not None else time.sleep
+        self.sleep = sleep  # Accepted for API compatibility; the runner never sleeps.
         self.now = now if now is not None else local_now
         self.on_resolved = on_resolved
         self.stop_event = stop_event
@@ -50,33 +49,9 @@ class WatchRunner:
         self.monitor: ArrivalMonitor | None = None
         self.vehid: str | None = None
         self.validator = ObservationValidator()
-        self.consecutive_failures = 0
-        self._next_backoff = self.config.initial_backoff
         self._diagnostic_timestamp = object()
         self._diagnostics: set[str] = set()
         self._result: int | None = None
-
-    def _retry(self, message):
-        self.consecutive_failures += 1
-        delay = self._next_backoff
-        self._next_backoff = min(self.config.max_backoff, delay * 2)
-        logger.warning("%s Fallo consecutivo %d; reintentando en %g s.",
-                       message, self.consecutive_failures, delay)
-        self._wait(delay)
-
-    def _wait(self, seconds):
-        if self.stop_event is not None:
-            if self.stop_event.wait(seconds):
-                raise KeyboardInterrupt()
-        else:
-            self.sleep(seconds)
-
-    def _recovered(self):
-        if self.consecutive_failures:
-            logger.info("Adquisición recuperada después de %d fallos; polling normal restaurado.",
-                        self.consecutive_failures)
-        self.consecutive_failures = 0
-        self._next_backoff = self.config.initial_backoff
 
     def _warn_once(self, code, message, *args):
         if code not in self._diagnostics:
@@ -124,14 +99,14 @@ class WatchRunner:
 
     def _run(self):
         logger.info("Vigilando %s → %s", self.identifier, self.destination or "EMI (Poblado o Taller)")
+        version = None
         while True:
             if self.stop_event is not None and self.stop_event.is_set():
                 return 130
             try:
-                vehicles = self.client.get_vehicles()
-            except TransientAcquisitionError as error:
-                self._retry(error.public_message)
-                continue
+                snapshot = self.client.wait(after_version=version, stop_event=self.stop_event)
+                version = (snapshot.epoch, snapshot.version)
+                vehicles = self.client.bind(snapshot).get_vehicles(include_retained=False)
             except AcquisitionError as error:
                 self.failure_code = "acquisition"
                 logger.error("%s Vigilancia detenida.", error.public_message)
@@ -160,16 +135,14 @@ class WatchRunner:
                 try:
                     vehicle = find_vehicle_by_id(vehicles, self.vehid)
                 except VehicleNotFoundError:
-                    self._retry("El VEHID vigilado está temporalmente ausente; estado conservado.")
+                    logger.warning("El VEHID vigilado está temporalmente ausente; estado conservado.")
                     continue
                 except AmbiguousVehicleError:
                     self.failure_code = "ambiguous"
                     logger.error("El VEHID vigilado es ambiguo; vigilancia detenida.")
                     return 1
-            self._recovered()
             if self._process(vehicle):
                 return 0
-            self._wait(self.config.polling_interval)
 
     def run(self) -> int:
         if self._result is not None:
@@ -188,7 +161,7 @@ class WatchRunner:
         return self._result
 
 
-def watch_arrival(client: VehicleSource, identifier: str, notifier: NotificationService,
+def watch_arrival(client: SnapshotSource, identifier: str, notifier: NotificationService,
                   config: WatchConfig | None = None, *, destination: str | None = None,
                   sleep=None, now=None) -> int:
     """Caso de uso de vigilancia a EMI; destination es compatibilidad explícita I2."""

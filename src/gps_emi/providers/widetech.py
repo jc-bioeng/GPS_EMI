@@ -36,7 +36,7 @@ WideTechError = AcquisitionError
 TRANSIENT_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 
 
-class WideTechClient:
+class LegacyWideTechTransport:
     """Adaptador del endpoint interno observado, sin contrato oficial.
 
     Parameters se genera desde sesión/estado explícitos; formato HTTP conservado.
@@ -136,8 +136,18 @@ class WideTechClient:
         return vehicles
 
 
+class WideTechClient:
+    """Compatibility facade: creating a client never creates a transport."""
+    def get_vehicles(self):
+        from gps_emi.acquisition_runtime import current_source
+        return current_source().get_vehicles()
+
+    def load_data_log(self):
+        raise AcquisitionError('El acceso al payload LoadDataLog fue retirado; use snapshots.')
+
+
 def load_data_log():
-    """Compatibilidad con el prototipo."""
+    """Raw-payload compatibility is intentionally disabled, with no HTTP."""
     return WideTechClient().load_data_log()
 
 

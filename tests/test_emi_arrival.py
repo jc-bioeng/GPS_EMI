@@ -1,3 +1,4 @@
+from snapshot_fakes import ScriptedSnapshots
 from dataclasses import replace
 from datetime import datetime, timedelta
 from unittest.mock import Mock
@@ -78,7 +79,7 @@ def test_emi_runner_preserves_i2_recovery_and_temporal_validation(site, caplog):
         [vehicle()], TransientAcquisitionError(), [vehicle(site, -60)],
         [vehicle(site, 0)], [], [vehicle(site, 60)],
     ]
-    runner = WatchRunner(client, 'AMB-20', None, notifier, sleep=sleep, now=lambda: BASE + timedelta(minutes=5))
+    runner = WatchRunner(ScriptedSnapshots(client), 'AMB-20', None, notifier, sleep=sleep, now=lambda: BASE + timedelta(minutes=5))
     assert runner.run() == 0
     assert runner.run() == 0
     notifier.send_arrival.assert_called_once()
@@ -86,7 +87,7 @@ def test_emi_runner_preserves_i2_recovery_and_temporal_validation(site, caplog):
     assert event.site == site
     assert event.vehicle.gps_timestamp == BASE + timedelta(minutes=1)
     assert client.get_vehicles.call_count == 6
-    assert [call.args[0] for call in sleep.call_args_list] == [30, 5, 30, 30, 5]
+    sleep.assert_not_called()
     assert 'OUT_OF_ORDER' in caplog.text
     assert 'Adquisición recuperada' in caplog.text
     assert 'OUTSIDE_EMI' in caplog.text and 'INSIDE_EMI' in caplog.text
@@ -96,7 +97,7 @@ def test_emi_runner_preserves_i2_recovery_and_temporal_validation(site, caplog):
 def test_watch_use_case_between_sites_never_notifies(start, end):
     client, notifier = Mock(), Mock()
     client.get_vehicles.side_effect = [[vehicle(start)], [vehicle(end, 60)], SessionExpiredError()]
-    assert watch_arrival(client, 'PJU886', notifier, sleep=Mock(), now=lambda: BASE) == 1
+    assert watch_arrival(ScriptedSnapshots(client), 'PJU886', notifier, sleep=Mock(), now=lambda: BASE) == 1
     notifier.send_arrival.assert_not_called()
 
 

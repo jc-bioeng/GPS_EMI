@@ -1,3 +1,4 @@
+from snapshot_fakes import snapshot_reader, ScriptedSnapshots
 from unittest.mock import Mock
 
 import pytest
@@ -100,7 +101,7 @@ def test_interactive_signature_allowlist_dedup(wa_config, messenger, kind):
 def test_feedback_precedes_acquisition_and_error(wa_config, messenger, command, fail):
     events = []
     messenger.client.send_text.side_effect = lambda recipient, text: events.append(text)
-    source = Mock()
+    source = snapshot_reader(Mock())
     def acquire():
         assert len(events) == 1 and events[0].startswith('🔎 Consultando ')
         events.append('ACQUIRE')
@@ -111,13 +112,13 @@ def test_feedback_precedes_acquisition_and_error(wa_config, messenger, command, 
     service = MessageService(wa_config, messenger, Mock(), lambda: source)
     service.handle(IncomingMessage('id', NUMBER, command, 1000000))
     assert len(events) == 3
-    assert 'No fue posible consultar' in events[-1] if fail else 'última posición reportada' in events[-1].lower()
+    assert 'no está disponible' in events[-1] if fail else 'última posición reportada' in events[-1].lower()
     source.get_vehicles.assert_called_once()
 
 
 def test_feedback_send_failure_does_not_cancel_query(wa_config, messenger):
     messenger.client.send_text.side_effect = [WhatsAppError('timeout'), None]
-    source = Mock()
+    source = snapshot_reader(Mock())
     source.get_vehicles.return_value = [Vehicle('1', 'PJU886', mobile_number='AMB-20')]
     service = MessageService(wa_config, messenger, Mock(), lambda: source)
     service.handle(IncomingMessage('id', NUMBER, 'UBICACION amb20', 1000000))
@@ -128,7 +129,7 @@ def test_feedback_send_failure_does_not_cancel_query(wa_config, messenger):
 
 @pytest.mark.parametrize('text', ['MENU', 'MENÚ', 'INICIO'])
 def test_menu_commands_send_native_menu(wa_config, messenger, text):
-    source = Mock()
+    source = snapshot_reader(Mock())
     service = MessageService(wa_config, messenger, Mock(), source)
     service.handle(IncomingMessage('id', NUMBER, text, 1000000))
     messenger.client.send_menu.assert_called_once_with(NUMBER)

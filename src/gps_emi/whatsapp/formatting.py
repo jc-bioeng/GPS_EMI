@@ -1,7 +1,7 @@
 """Presentación WhatsApp de resultados I3, sin lógica GPS."""
 from html.parser import HTMLParser
 
-from gps_emi.formatting import format_age, format_speed, format_ignition
+from gps_emi.formatting import format_age, format_speed, format_ignition, acquisition_note
 from gps_emi.monitoring.observation import gps_fix_warning
 from gps_emi.sites import EMI_SITES
 
@@ -46,7 +46,7 @@ WATCH_MENU = """🚑 Vigilancias
 _Responde con el número de una opción._"""
 SITE_PROMPT = "🏥 Ambulancias en sede\n\n1. EMI Medellín - Poblado\n2. EMI Medellín - Taller\n\n_Responde con el número de una sede._"
 DENIED = "🔒 Este número no está autorizado para consultar información del sistema GPS EMI."
-GPS_ERROR = "⚠️ No fue posible consultar GPS EMI en este momento.\nEl acceso a GPSpace requiere atención del sistema."
+GPS_ERROR = "⚠️ Nuestra adquisición GPS no está disponible en este momento. Intenta la consulta nuevamente."
 NO_WATCHES = "🚑 No tienes vigilancias activas."
 
 
@@ -166,6 +166,8 @@ def format_location(result):
     if gps_fix_warning(vehicle.gps_fix):
         lines.append("⚠️ GPSFix=0: advertencia diagnóstica; posición conservada.")
     lines.append("\n_Esta es la última posición reportada y no garantiza la ubicación física actual._")
+    if result.acquisition is not None:
+        lines.append(acquisition_note(result))
     return "\n".join(lines)
 
 
@@ -180,8 +182,12 @@ def format_site(result):
             movement = entry.movement.value if entry.movement else "Movimiento N/D"
             lines.extend([f"{display(vehicle.mobile_number)} · {display(vehicle.plate)}",
                           f"{freshness(entry)} · {movement} · GPSFix: {display(vehicle.gps_fix)}", ""])
+            if entry.acquisition is not None and entry.acquisition.retained:
+                lines.append(acquisition_note(entry))
         # lines.append("⚠️ Reporte desactualizado. ❔ Antigüedad no disponible o reloj por revisar.")
     lines.append("_Basado en la última posición reportada; no garantiza presencia física actual._")
+    if result.acquisition is not None:
+        lines.append(acquisition_note(result))
     return "\n".join(lines)
 
 

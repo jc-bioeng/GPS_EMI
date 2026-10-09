@@ -136,7 +136,7 @@ def test_request_uses_dynamic_parameters(monkeypatch):
         return response
 
     monkeypatch.setattr(widetech.requests, "post", post)
-    client = widetech.WideTechClient()
+    client = widetech.LegacyWideTechTransport()
     assert client.load_data_log() == '{"Rows":[]}'
     assert bodies[0] == ("Parameters=" + REQUEST_GOLDEN).encode()
     client.load_data_log()
@@ -150,7 +150,7 @@ def test_request_uses_dynamic_parameters(monkeypatch):
 def test_missing_configuration_fails_before_http(monkeypatch, variable):
     monkeypatch.setenv("GPSPACE_COOKIE", "synthetic-cookie")
     monkeypatch.delenv(variable)
-    client = widetech.WideTechClient()  # Configuración deliberadamente diferida.
+    client = widetech.LegacyWideTechTransport()  # Configuración deliberadamente diferida.
     with pytest.raises(LoadDataLogConfigError):
         client.load_data_log()  # El fixture global prohíbe HTTP real.
 
@@ -167,4 +167,4 @@ def test_explicit_configuration_works_without_env(monkeypatch):
         response._content = b'{"Rows":[]}'
         return response
     monkeypatch.setattr(widetech.requests, "post", post)
-    assert widetech.WideTechClient(session_info=session, query_state=state).get_vehicles() == []
+    assert widetech.LegacyWideTechTransport(session_info=session, query_state=state).get_vehicles() == []

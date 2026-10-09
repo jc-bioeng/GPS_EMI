@@ -1,3 +1,4 @@
+from snapshot_fakes import snapshot_reader, ScriptedSnapshots
 import hashlib
 import hmac
 import json
@@ -111,7 +112,7 @@ def test_raw_bytes_signature_not_reserialized(wa_config):
 
 def test_duplicate_webhook_one_query_one_response(wa_config, messenger):
     from gps_emi.models import Vehicle
-    source = Mock()
+    source = snapshot_reader(Mock())
     source.get_vehicles.return_value = [Vehicle('433909', 'PJU886', mobile_number='AMB-20')]
     service = MessageService(wa_config, messenger, Mock(), lambda: source)
     inbox = Inbox(service.handle, now=lambda: 0)
@@ -197,7 +198,7 @@ def test_worker_error_is_safe_and_next_message_runs(wa_config, caplog):
 
 
 def test_duplicate_watch_starts_once(wa_config, messenger):
-    watches, source = Mock(), Mock()
+    watches, source = snapshot_reader(Mock()), Mock()
     service = MessageService(wa_config, messenger, watches, source)
     inbox = Inbox(service.handle, now=lambda: 0)
     client = create_app(wa_config, inbox).test_client()

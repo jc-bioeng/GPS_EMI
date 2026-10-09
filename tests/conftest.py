@@ -15,12 +15,13 @@ def observed_amb20_payload():
 
 
 @pytest.fixture(autouse=True)
-def offline(monkeypatch, caplog):
+def offline(monkeypatch, caplog, tmp_path):
     def forbidden(*args, **kwargs):
         pytest.fail("Las pruebas no permiten conexiones de red ni esperas reales")
     monkeypatch.setattr(requests.sessions.Session, "request", forbidden)
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     monkeypatch.setattr(time, "sleep", forbidden)
+    monkeypatch.setattr('gps_emi.acquisition_runtime.default_lock_path', lambda: tmp_path/'authority.lock')
     # El servidor simulado nunca inicia persistencia local real.
     monkeypatch.setattr('gps_emi.whatsapp.server.start_collector', lambda: None)
     monkeypatch.setattr('gps_emi.analysis.collector.start_collector', lambda: None)

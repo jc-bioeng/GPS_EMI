@@ -1,3 +1,4 @@
+from snapshot_fakes import ScriptedSnapshots, publish
 import csv
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -194,11 +195,12 @@ def test_single_snapshot_operational_path_isolated_from_collector(failure):
     collector = Mock()
     if failure:
         collector.submit.side_effect = sqlite3.OperationalError('private')
-    polling = FleetPolling(lambda: source, manager, collector=collector, autostart=False)
-    assert polling.cycle() is None  # Captura pasiva: no genera consultas estando inactivo.
+    polling = FleetPolling(lambda: ScriptedSnapshots(source), manager, collector=collector, autostart=False)
+    assert publish(polling) is None  # Captura pasiva: no genera consultas estando inactivo.
     source.get_vehicles.assert_not_called()
     polling.request_watch('owner-synthetic', 'TEST-1', 'target-synthetic', vehicle_id='synthetic-1')
-    assert polling.cycle() == 30
+    collector.active = True
+    assert publish(polling) is None
     source.get_vehicles.assert_called_once()
     assert len(manager.get_active_watches('owner-synthetic')) == 1
     snapshot, acquired = collector.submit.call_args.args

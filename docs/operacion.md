@@ -1,6 +1,6 @@
 # Manual de operación
 
-Revisión del 8 de octubre de 2026. Estos comandos son instrucciones para el
+Revisión del 9 de octubre de 2026, reconciliada con fase 2. Estos comandos son instrucciones para el
 operador; documentarlos no implica ejecutarlos ni certificar un despliegue.
 Consultar [arquitectura](guia-del-sistema.md) y [estado de implementación](README.md).
 
@@ -13,7 +13,11 @@ de sesiones no carga `.env` ni consulta GPSpace.
 
 | Configuración | Finalidad |
 | --- | --- |
-| `GPSPACE_COOKIE` | Sesión externa del portal |
+| `GPSPACE_COOKIE` | Solo legado: sesión externa del portal |
+| `WIDETECH_LOGIN`, `WIDETECH_PASSWORD` | Oficial: credenciales del método, sin valores en documentación |
+| `WIDETECH_PLATE_FIELD`, `WIDETECH_MOBILE_FIELD` | Oficial: asignación obligatoria y complementaria de Movil/VEH_NAM |
+| `WIDETECH_TIMEZONE` | Oficial: America/Bogota por defecto |
+| `GPS_EMI_STATE_DIR` | Directorio absoluto de estado/exclusión, común a CLI y servidor |
 | `GPSPACE_SESSION_INFO`, `GPSPACE_LOADDATALOG_STATE` | Insumos para generar Parameters dinámicos |
 | `GPSPACE_CONTENT_TYPE` | Ajuste opcional del tipo de contenido |
 | `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` | Envío por Cloud API |
@@ -27,9 +31,9 @@ de sesiones no carga `.env` ni consulta GPSpace.
 
 Los nombres no son credenciales. No copiar valores de sesión a documentación,
 comandos compartidos ni Git. La autenticación del portal sigue siendo externa,
-sin renovación automática. Las credenciales del adaptador oficial aislado se
-entregan mediante su configuración explícita; aún no hay un cambio de proveedor
-operacional mediante estas variables.
+sin renovación automática. `--official` selecciona RenderExcel usando las
+variables WIDETECH; sin esa opción se usa el legado. No hay fallback automático.
+Los dos modos comparten Coordinator y su política de adquisición.
 
 ## Consola y WhatsApp
 
@@ -42,6 +46,15 @@ Desde `C:\GPS_EMI`, con instalación y configuración existentes:
 .\.venv\Scripts\python.exe gpspace_loaddatalog.py --action site --site "EMI Medellin_Poblado"
 .\.venv\Scripts\python.exe -m gps_emi.whatsapp.server
 ```
+
+Los comandos anteriores seleccionan el legado. Añadir `--official --interval 30`
+a la CLI o al servidor para RenderExcel, con mapping obligatorio ya configurado.
+Ejemplo sin datos operativos: `gps-emi --official --action location --identifier SYNTHETIC-MOBILE-A`.
+Tras reinicio se espera el primer snapshot; la aplicación informa inicialización
+y no presenta posiciones de SQLite como actuales. Consultas con caché muestran
+su antigüedad. CLI y servidor requieren ejecución exclusiva en esa instalación:
+ambos deben usar el mismo GPS_EMI_STATE_DIR, independiente del cwd. No hay IPC
+ni coordinación con otras instalaciones/hosts.
 
 Las comillas de Poblado son necesarias por el espacio. Ctrl+C detiene el proceso.
 No lanzar otra instancia sobre el mismo puerto. La CLI usa los nombres exactos
@@ -100,7 +113,13 @@ configuración. No publicar una salida de configuración expandida ni de inspecc
 del entorno. Los logs son para revisión local, no un volcado para compartir.
 
 La imagen ejecuta como UID/GID 10001. El volumen `gps-observations` monta `/data`
-y persiste SQLite; el puerto se liga a `127.0.0.1:8000`. Los logs json-file rotan
+y persiste SQLite y `/data/state/acquisition.lock`. Docker configura
+`GPS_EMI_STATE_DIR=/data/state`; la imagen prepara /data para UID/GID 10001
+con modo 700. Volúmenes previos/bind mounts requieren permisos adecuados
+preparados por el administrador. La aplicación no eleva privilegios ni cambia
+de lock ante permisos insuficientes. El plazo de próxima adquisición persiste
+al reiniciar; no borrar el lock para saltar la espera.
+El puerto se liga a `127.0.0.1:8000`. Los logs json-file rotan
 a 10 MB y tres archivos. El cierre dispone de 15 segundos de gracia, con esperas
 internas acotadas; un HTTP en curso no es cancelable instantáneamente.
 
@@ -109,6 +128,11 @@ cuando corresponda. Reiniciar pierde vigilancias, conversaciones y selecciones,
 aunque conserva campañas y datos en el volumen. No usar `down -v` si se deben
 conservar datos. Este contenedor no proporciona por sí solo dominio, HTTPS ni
 administración de VPS.
+
+La validación real de fase 2 en Docker/Ubuntu sigue pendiente: el último intento
+de consultar Docker no encontró el motor Linux. No se verificó UID 10001,
+permisos POSIX, persistencia de volumen ni flock en contenedor. El CMD existente
+no activa `--official`; activar el modo es una operación explícita posterior.
 
 Para respaldar SQLite, usar su API de backup o una copia consistente con escritores
 detenidos. Copiar únicamente el archivo `.db` mientras WAL está activo puede
@@ -120,7 +144,12 @@ por el programa. Un rollback de imagen no garantiza reversión del esquema.
 
 | Síntoma | Interpretación y revisión |
 | --- | --- |
-| `SESSION_EXPIRED` | Renovar autenticación externamente; reiniciar y recrear vigilancias fallidas |
+| `SESSION_EXPIRED` (legado) | Renovar autenticación externamente; reiniciar y recrear vigilancias fallidas |
+| `INITIALIZING` | Todavía no hay publicación inicial |
+| `READY` / `RECOVERING` | Publicación disponible; recuperación reduce gradualmente el backoff |
+| `UNAVAILABLE` | Último intento global fallido; conservar snapshot anterior y su edad |
+| `BLOCKED_METHOD` | Fallo terminal de autenticación/autorización/configuración o funcional; requiere intervención, no implica caída general de WideTech |
+| `STOPPED` | Autoridad detenida; no admite adquisiciones |
 | Errores de red | Revisar conectividad y backoff, sin asumir que el móvil salió de sede |
 | Respuesta vacía o malformada | Revisar categoría del proveedor; no equivale a flota vacía válida |
 | STALE o DUPLICATE | Posición antigua o ya procesada; no implica movimiento nuevo |
@@ -140,7 +169,10 @@ git status --short
 Las pruebas usan datos sintéticos y no deben consultar servicios reales. La
 [fase 1 oficial](widetech-official-phase1.md) registra su validación de 892 tests
 y el entorno alternativo utilizado; no confundir esa ejecución con una nueva.
-Revisar por separado pruebas offline, aceptación externa y estado desplegado.
+Fase 2 registra 919 tests anteriores y 933 tras cerrar los dos hallazgos.
+La [especificación de fase 2](widetech-official-phase2-spec.md) separa la regresión
+ejecutada para este commit y las pruebas CLI reportadas por el usuario el
+9 de octubre. Revisar por separado pruebas offline, aceptación externa y despliegue.
 
 Excluir secretos, SQLite, CSV, logs, caches y artefactos de prueba. Preservar
 cambios locales ajenos al incremento. `.codemapignore` procede del uso de Codemap

@@ -7,7 +7,8 @@ RUN python -m pip wheel --no-cache-dir --no-deps --wheel-dir /wheels .
 FROM python:3.14.7-slim-bookworm
 ENV PYTHONUNBUFFERED=1 \
     PYTHONUTF8=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    GPS_EMI_STATE_DIR=/data/state
 WORKDIR /app
 COPY requirements-runtime.txt ./
 RUN python -m pip install --no-cache-dir -r requirements-runtime.txt \

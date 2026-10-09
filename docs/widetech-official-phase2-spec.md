@@ -1,240 +1,368 @@
-# Fase 2 — especificación de integración, sin implementación
+# Fase 2 — adquisición central y snapshot compartido
 
-Referencia vigente: encargo de cierre del usuario del 8 de octubre de 2026.
-Prevalece sobre propuestas anteriores. [Contrato y cierre de fase 1](widetech-official-phase1.md).
-Este documento no activa proveedores, modifica bases ni autoriza despliegue.
+**Referencia consolidada:** [Decisiones arquitectónicas aprobadas](decisiones-arquitectonicas-renderexcel.md). Sus acuerdos prevalecen sobre propuestas de diseño de este documento. Consultar ARQ, DAT-08, las fases y el registro TEC; no volver a solicitar decisiones ya aprobadas.
 
-Aclaración posterior del usuario: salvo la envoltura funcional real de RenderExcel,
-los temas de límites, mapping, zona horaria e integración ya se discutieron y
-decidieron para incrementos posteriores. Los detalles marcados aquí como propuestas
-son un diseño de referencia, no nuevas decisiones exigidas ni bloqueos: al ejecutar
-cada incremento prevalecen los acuerdos del usuario, que se consolidarán por escrito
-sin reabrirlos. No se inventan valores de acuerdos que no están transcritos aquí.
+Implementación local del encargo de fase 2, 8 de octubre de 2026, incluyendo la
+indicación posterior de refactorizar la arquitectura existente. Sustituye la
+propuesta anterior de este documento; no modifica los acuerdos arquitectónicos.
+[Contrato de fase 1](widetech-official-phase1.md). Aquel encargo se realizó sin
+despliegue, llamadas reales, cambios al .env operativo, migraciones, commit ni
+push. La reconciliación documental y el commit selectivo posteriores del
+9 de octubre se registran por separado al final de la evidencia.
 
-## Objetivo y decisiones aprobadas
+## Arquitectura final y responsabilidad extraída
 
-Un único coordinador adquiere RenderExcel para todos los consumidores, sin
-solapamientos. Intervalo inicial **30 segundos configurable**, backoff progresivo,
-recuperación gradual y respeto de Retry-After. Los 30 segundos son configuración
-aprobada, no un límite certificado por WideTech; la descripción del 109 no los
-reemplaza por 20. El adaptador mantiene una petición por acquire y cero reintentos.
+```mermaid
+flowchart TD
+    CLI[CLI y entrada de compatibilidad] --> Runtime[AcquisitionRuntime]
+    Server[Servidor WhatsApp] --> Runtime
+    Runtime --> Lease[HostLease: exclusión de esta instalación]
+    Runtime --> C[Coordinator: único planificador GPS]
+    C --> Adapter[Adaptador elegido al arrancar]
+    Adapter --> Official[RenderExcel de fase 1]
+    Adapter --> Legacy[LoadDataLog legado explícito]
+    C --> Snapshot[Snapshot inmutable con versión y acquired_at]
+    Snapshot --> Source[SnapshotSource: proyección Medellín]
+    Source --> Queries[Consultas y resolución existentes]
+    Source --> Runner[WatchRunner existente]
+    Snapshot --> Fleet[FleetPolling: distribución y altas]
+    Fleet --> WM[WatchManager existente]
+    Fleet --> Collector[Collector existente: submit una vez por publicación]
+    Queries --> Service[MessageService y selección existentes]
+    Service --> Inbox[Inbox: completar pendientes sin esperar GPS]
+    WM --> Channels[Canales existentes]
+    Runner --> Channels
+```
 
-Consultas y campañas: ambulancias nacionales por prefijo fltName `Ambulancias`,
-con la normalización de fase 1. Vigilancias: exclusivamente Medellín. Un cambio
-confirmado a otra flota termina la vigilancia; no hay restauración automática.
-La implementación de catálogo, campañas y continuidad/reclasificación de
-vigilancias corresponde a sus fases respectivas. No se infiere clasificación
-por ubicación, etiqueta o VEH_DESC. No se utiliza GetMobileList como dependencia
-ni como health check: el 108 observado allí no determina acceso a RenderExcel.
+Las dos ramas del adaptador son alternativas **excluyentes de composición**:
+solo existe una instancia, un planificador y un transporte GPS activo por runtime.
+No hay fallback al otro adaptador después de un fallo. La cuota Meta sigue
+siendo independiente.
 
-## Inventario comprobado en el código actual
-
-| Camino | Punto actual | Cambio previsto |
-|---|---|---|
-| Vigilancias y demanda del collector | `src/gps_emi/monitoring/fleet_polling.py`, `FleetPolling.cycle`: `source_factory().get_vehicles()`; su propio hilo espera y hace backoff | Consumir versiones publicadas; retirar su autoridad HTTP y su temporizador de adquisición |
-| Consulta por etiqueta | `src/gps_emi/queries.py`, `get_vehicle_location`: `client.get_vehicles()` | Resolver sobre un snapshot explícito, sin HTTP |
-| Consulta por VEH_ID | Mismo archivo, `get_vehicle_location_by_id` | Validar la identidad seleccionada en el snapshot, sin fallback por etiqueta |
-| Inventario por sede | Mismo archivo, `list_vehicles_at_site` | Filtrar el snapshot; conservar nombres exactos de geocercas |
-| WhatsApp ubicación y sede | `src/gps_emi/whatsapp/service.py`, `MessageService.handle`, acciones `location` y `site` | Solicitudes pendientes asíncronas al coordinador |
-| Selección de vehículo | `MessageService.handle`, `vehicle_select`: consulta por ID; `WatchManager.start_selected` encola alta en FleetPolling | Mantener owner, generación, TTL y consumo único; revalidar por ID al completar |
-| Contextos de selección | `src/gps_emi/selection.py`, `PendingSelections` | Ya almacena candidatos en memoria; no convertir paginación en HTTP |
-| CLI consultas | `src/gps_emi/cli.py`, `_execute` crea `WideTechClient` y llama queries | Cliente del coordinador; puede esperar con timeout en consola |
-| CLI vigilancia | `src/gps_emi/monitoring/runner.py`, `WatchRunner._run` llama `get_vehicles()` y espera con su backoff | Suscripción al coordinador; retirar autoridad de consulta del runner |
-| Arranque WhatsApp | `src/gps_emi/whatsapp/server.py`, `source_factory` devuelve nuevas instancias WideTechClient | Inyectar cliente único del coordinador, sin crear adaptadores por mensaje |
-| Entradas de compatibilidad | `gpspace_loaddatalog.py` delega a CLI; `providers/widetech.py::load_data_log` instancia cliente | No permitir un camino operacional que evada el coordinador al activar el nuevo modo |
-
-El collector actual es pasivo: FleetPolling llama `collector.submit(vehicles,
-acquired_at)` tras adquirir; su sesión activa mantiene demanda de polling.
-`src/gps_emi/analysis/collector.py` y las sesiones existentes no son un segundo
-proveedor HTTP. Conservar esa separación en la integración posterior.
-
-## Autoridad única, procesos y concurrencia
-
-Diseño propuesto: servicio propietario del coordinador, con clientes locales
-para WhatsApp, CLI y consumidores. Solo el propietario posee el adaptador y
-credenciales. IPC/API interna autenticada y no expuesta públicamente; su elección
-concreta seguirá los acuerdos del incremento correspondiente. Una exclusión de proceso a nivel del
-host y dominio de cuenta/método impide iniciar un segundo propietario. Los clientes
-no tienen fallback HTTP cuando el propietario está ausente: informan indisponibilidad.
-
-Un mutex de Python o una instancia por worker no resuelve competencia entre
-procesos. Todos los entrypoints deben pasar por el mismo servicio. Si se despliega
-en varios hosts, bloquear esa topología hasta disponer de liderazgo con fencing
-y un límite compartido; no confiar en locks locales ni en «una réplica» declarada.
-Otras herramientas externas que usen la misma cuenta quedan fuera del control
-del proceso y deben identificarse antes de activar.
-
-El propietario mantiene una sola adquisición en vuelo y agrupa solicitudes
-concurrentes (single flight). Cien solicitudes no generan cien consultas. Leer
-la caché, abrir otra CLI, crear otra vigilancia o cambiar de worker no reinicia
-el plazo. El lock se mantiene durante el intento y la publicación atómica;
-callbacks y envíos no deben ejecutarse bajo ese lock ni sobre el hilo HTTP.
-
-## Relojes, intervalos y política propuesta
-
-Separar reloj monotónico para plazos y reloj aware UTC para auditoría. Intervalo
-base B=30 s configurable y validado. Medir entre inicios de intentos; nunca iniciar
-otro mientras siga uno en vuelo. Propuesta precisa para probar:
-
-`next_start >= max(last_start + B, finished_at_monotonic + failure_delay, retry_after_deadline)`.
-
-En éxito estable, failure_delay=0. Ante fallos recuperables, primer delay B,
-duplicar sucesivamente hasta un máximo configurable (300 s es solo una propuesta
-de referencia, subordinada a lo ya acordado); nunca acortar un Retry-After por ese máximo. No reutilizar
-sin cambios WatchConfig.initial_backoff=5/max_backoff=30: hoy pertenecen a otro
-loop y podrían acelerar indebidamente las peticiones.
-
-Recuperación propuesta: después de cada adquisición válida dividir el delay
-vigente por dos hasta B; tras llegar a B, pasar a estable y delay=0. Un nuevo
-fallo vuelve a aumentarlo. No recuperar todo el tráfico después de un único éxito.
-No hay ráfagas para recuperar ciclos perdidos. Sin demanda activa se puede
-suspender el loop, pero el siguiente solicitante conserva todos los plazos.
-
-Retry-After segundos se ancla al momento de recepción; fecha absoluta se compara
-con UTC al recibirla y se convierte a deadline monotónico. Fechas pasadas no
-eliminan el intervalo base. Cambios del reloj del sistema no anticipan un plazo
-ya establecido. Un Retry-After en una adquisición exitosa también se respeta.
-
-Reinicio: preservar de forma separada de las bases operativas el próximo permiso
-de consulta/Retry-After y la propiedad de la autoridad; no persistir secretos.
-Si no hay estado temporal fiable, iniciar con espera conservadora y estado no
-listo, sin asumir permiso inmediato. El mecanismo durable y el tratamiento de
-relojes tras reinicio seguirán las decisiones del incremento correspondiente. En ningún
-caso abrir otro proceso elude una restricción aún vigente.
-
-## Snapshot compartido y arranque
-
-Contrato propuesto e inmutable: `epoch`, `version`, `source`, `request_started_at`,
-`acquired_at` real al terminar recepción, `published_at`, `records`, `diagnostics`,
-`duplicate_ids`, `incomplete_rows`, `coverage=unknown`, `quality`, `timezone_name`.
-Versiones monotónicas dentro del epoch; una lectura cacheada conserva versión y
-acquired_at. Publicar después de parsing y validación, nunca al iniciar la llamada.
-Las fechas GPS/servidor siguen separadas; ninguna se sustituye por acquired_at.
-
-Estado separado del snapshot: `INITIALIZING`, `READY`, `DEGRADED`, `UNAVAILABLE`,
-`BLOCKED_METHOD`, `STOPPING`, `STOPPED`; último intento/éxito, error seguro y próximo
-plazo. UNAVAILABLE describe adquisición de esta integración; no afirma caída
-general de WideTech. La última información válida sigue disponible con antigüedad
-y error actual explícitos, sin cambiar acquired_at ni emitir observaciones nuevas.
-
-Arranque requiere el primer snapshot válido de este proceso/epoch; hasta entonces
-responder inicialización o pendiente. Un catálogo o ubicación persistidos son
-históricos, no evidencia actual. Un DataTable válido vacío puede ser una adquisición
-estructural válida con cobertura desconocida, nunca prueba de desaparición global.
-Un status 0/100 sin DataTable y un estado sin datos no cumplen el requisito.
-
-Propuesta de calidad: guardar por separado el último lote recibido y la última
-vista aceptada; lotes con duplicados/incompletos se publican como degradados con
-evidencia íntegra, sin sustituir automáticamente la vista operativa válida. Nunca
-mezclar filas antiguas y nuevas bajo una única fecha actual. La política exacta
-de aceptación parcial seguirá lo acordado para conectar consumidores; no inferir
-un umbral de cobertura por el número observado de vehículos.
-
-## Espera asíncrona y separación de eventos
-
-`request_snapshot(min_version, max_age, deadline, request_context)` devuelve una
-vista disponible o ticket pendiente; no ejecuta HTTP en el llamador. Valores de
-max_age y deadline deben ser configurables y definidos en las pruebas de integración.
-El coordinador entrega completados mediante una cola acotada. No hacer
-`future.result`, sleeps ni espera del intervalo dentro de `Inbox._process`:
-`whatsapp/worker.py::Inbox` tiene un único consumidor.
-
-MessageService registra intención y vuelve al worker; finalización reentra por
-eventos serializados para no mutar sus contextos desde el hilo HTTP. Comprobar
-owner, generación, TTL y cancelación antes de contestar o crear una vigilancia;
-un comando nuevo invalida una respuesta tardía. Saturación/timeouts finalizan el
-ticket explícitamente; no bloquean menús, cancelaciones ni el webhook. El envío
-a Meta no gobierna la frecuencia GPS. CLI sí puede esperar fuera del worker,
-con cancelación y plazo acotados, usando la misma autoridad.
-
-Tres conceptos distintos:
-
-1. Adquisición nueva: intento validado y nueva versión, aunque GPS no haya cambiado.
-2. Presencia en catálogo: VEH_ID y flota recibidos; incluir también no ambulancias
-   y desconocidos para futura reclasificación. Ausencia no equivale a desaparición.
-3. Observación GPS nueva: decisión por vehículo sobre Id/FechaGPS y orden temporal;
-   leer caché o repetir registro no genera otra transición de llegada.
-
-`ObservationValidator` actual evalúa orden/antigüedad de Vehicle naive; una futura
-conversión explícita debe evitar comparar fechas naive y aware. No activar el
-adaptador hasta validar etiquetas/fechas y la compatibilidad de consumidores.
-
-## Errores y alcance de sus efectos
-
-| Evidencia | Política propuesta |
+| Componente | Cambio y responsabilidad |
 |---|---|
-| Red, timeout, HTTP 500/otros 5xx | Indisponibilidad de adquisición; backoff y conservación del último válido; no inferir causa funcional del texto |
-| HTTP 429 / funcional 109 | Restricción; mismo planificador y Retry-After, sin deducir 20 s de descripción |
-| Funcional 108 | Método denegado; detener reintentos automáticos de ese método hasta intervención/configuración; no declarar credenciales globalmente inválidas |
-| Autenticación estructurada / HTTP 401 o 403 | Suspender intentos de esta integración y pedir revisión; conservar distinción entre HTTP y código funcional, sin probar otros métodos |
-| Servicio suspendido, otros códigos funcionales o desconocidos | Retener categoría/código; política explícita por clase, por defecto bloqueo de adquisición pendiente de revisión, sin retry agresivo |
-| Sin datos, éxito sin DataTable, XML inválido | No publicar snapshot vacío; conservar último válido, diagnosticar y usar backoff acotado para errores de payload; escalamiento tras repetición configurable |
+| Nuevo `acquisition.py` | Extrae de FleetPolling planificación, restricciones, publicación y futures acotados. Contiene el contrato Snapshot y su proyección al Vehicle existente. |
+| Nuevo `acquisition_runtime.py` | Composición, reserva entre procesos y ciclo de vida compartidos por CLI y servidor. No es un segundo servicio de negocio. |
+| `monitoring/fleet_polling.py` | Conserva altas, resolución, callbacks y distribución. Se retiran HTTP, backoff y espera entre adquisiciones. Su hilo espera publicaciones/altas; el timeout de 0,2 s solo caduca altas pendientes. |
+| `monitoring/runner.py` | Conserva resolución por identidad, validación temporal, monitor y notificador. Espera versiones del coordinador; no adquiere ni calcula reintentos. |
+| `monitoring/watches.py` | Misma máquina de estados. Permite evaluar solo las altas nuevas cuando reutilizan una versión ya procesada por otras vigilancias. |
+| `queries.py` y presentación CLI/WhatsApp | Mismos casos de uso por etiqueta, VEH_ID y sede. Fijan un snapshot por operación y muestran hora/edad de adquisición separadas de la edad GPS. |
+| `whatsapp/service.py` y `worker.py` | Una sola ruta de consultas: pendiente y posterior ejecución de los casos de uso existentes. Inbox completa resultados entre mensajes y al quedar libre; no espera HTTP ni backoff. |
+| `selection.py` | Sin cambios de reglas: propietario, generación, TTL, consumo único, paginación e identidad. |
+| Collector, SQLite, CSV, canales | Sin cambios de esquema, deduplicación histórica o transporte de notificaciones. Reciben la misma proyección operacional que antes. |
+| `providers/widetech.py` | El antiguo transporte se identifica como LegacyWideTechTransport y solo se compone dentro de la autoridad. WideTechClient pasa a ser fachada de lectura; `load_data_log()` de compatibilidad falla sin HTTP. |
+| `cli.py`, `whatsapp/server.py` | Ambos componen AcquisitionRuntime; ya no crean un cliente HTTP por operación. `gpspace_loaddatalog.py` continúa delegando a CLI. |
+| `observability.py` | El resumen incorpora métricas del coordinador, sin disparar adquisiciones. |
+| `.gitignore` | Conserva la exclusión histórica de `.runtime/`; la reserva nueva usa el directorio de estado configurado. |
 
-Errores nunca causan desaparición, reclasificación ni llegada. El futuro contrato
-de vigilancia procesa cambio de flota solo cuando esté confirmado por catálogo;
-un fltName ausente no confirma otra flota. La fase 2 no implementa esa política
-ni restaura vigilancias automáticamente. No copiar el `fail_active` actual de
-FleetPolling como respuesta genérica a todo fallo del nuevo adaptador.
+Los adaptadores de transporte conservan sus pruebas unitarias con HTTP falso.
+Los consumidores reales solo reciben SnapshotSource. No se mantienen ramas de
+adquisición antiguas en FleetPolling, WatchRunner o MessageService para satisfacer
+mocks anteriores; las pruebas de negocio suministran snapshots.
 
-## Interfaces para fases posteriores
+## Snapshot y alcance operacional
 
-Proponer `on_acquisition(snapshot)` al catálogo (todas las filas y calidad),
-`on_snapshot(snapshot)` a consumidores y `on_acquisition_state(state)` a salud.
-Interfaces tipadas y colas acotadas con deduplicación por epoch/version; no crear
-catálogo persistente ni migraciones ahora. El collector futuro recibe una sola
-notificación por adquisición aceptada con acquired_at real; relecturas de caché
-no disparan submit. Su escritura sigue fuera del hilo de adquisición. Fallos de
-collector no originan otra petición GPS. Contrapresión y descartes deben ser
-explícitos; retención y campañas se especifican en sus fases.
+- Identificador `epoch + version`; epoch nuevo al arrancar. `acquired_at` aware
+  UTC al terminar adquisición y parsing, nunca tomado de FechaGPS.
+- Publicación bajo Condition, registros oficiales inmutables y proyecciones Vehicle
+  mediante copias. Leer caché no cambia versión, acquired_at ni contadores de éxito.
+- Conserva todas las filas oficiales, incluidas no ambulancias, procedencia,
+  clasificación, campos originales y diagnósticos. `received()` permite inspeccionar
+  el último lote interpretado con sus diagnósticos individuales.
+- Un fallo global de transporte, XML o estructura conserva la publicación anterior.
+  Un lote estructuralmente válido se publica aunque contenga filas defectuosas.
+  Las validaciones del adaptador de fase 1 permanecen intactas.
+- `records` conserva exactamente las filas recibidas. `usable_records` contiene
+  las filas actuales sin diagnósticos, con identidad única, coordenadas, fecha GPS,
+  flota y Zones conocido. Zones vacío explícito es distinto de ausente o nil.
+  Una fila sin flota o con un opcional inválido solo restringe esa fila, nunca el lote.
+- `operational` conserva por identidad la última fila utilizable y su epoch,
+  versión, acquired_at y procedencia originales. Si la fila actual es defectuosa,
+  duplicada o no recibida, se marca el motivo de conservación. No se escoge entre
+  duplicados ni se mezclan campos de reportes diferentes. Se conserva la fila
+  anterior completa incluso si el diagnóstico corresponde a un campo opcional:
+  política conservadora por vehículo, sin impedir actualizar los demás.
+- Consultas CLI/WhatsApp muestran los datos conservados con su edad original y
+  una indicación explícita, también en inventarios. Vigilancias y collector solo
+  reciben filas utilizables de la adquisición actual. Los datos conservados no
+  producen nuevas observaciones, movimientos ni llegadas; nunca se convierten
+  coordenadas ausentes en cero ni Zones desconocido en salida de una geocerca.
+  Esta conciliación ocurre una vez en Coordinator y usa la misma proyección
+  SnapshotSource. No introduce catálogo persistente ni recuperación de fase 5.
+- `coverage=unknown` siempre: XML válido y ausencia de diagnósticos no certifican
+  cobertura completa. No se inventa un porcentaje de disminución aceptable ni
+  contadores de desaparición. La detección semántica adicional queda en TEC-01/fase 3.
+- La proyección operacional admite exactamente `Ambulancias Medellin` y
+  `Ambulancias Medellín` tras la normalización de fase 1. No amplía consultas,
+  campañas ni vigilancias a todo el país en esta fase. La evidencia nacional
+  permanece en el snapshot para fases posteriores.
+- VEH_ID es identidad; Id permanece como registro GPS. Las etiquetas se asignan
+  mediante mapping explícito Movil/VEH_NAM, sin deducir placas por formato.
+- El parser usa WIDETECH_TIMEZONE, inicialmente America/Bogota. La proyección
+  convierte cada instante GPS a Bogotá antes de quitar tzinfo para los consumidores
+  actuales, cuyo reloj operacional es naive de Bogotá. Los originales aware se
+  conservan. No se mezclan directamente timestamps aware y naive.
+- Una adquisición distinta puede contener la misma observación GPS. Los validadores
+  existentes siguen deduplicando observaciones por su regla actual; collector
+  conserva su deduplicación histórica hasta fase 4. La advertencia por edad GPS
+  mayor a 300 s se conserva, sin adelantar la nueva regla de llegadas de fase 5.
+- No se leen ubicaciones de SQLite para inicializar el snapshot tras un reinicio.
 
-## Pruebas y secuencia de integración futura
+## Planificación y demanda
 
-Reloj monotónico/UTC, transporte, scheduler y notificaciones falsos; sin sleeps
-ni red reales. Cubrir 100 solicitudes simultáneas, HTTP lento, exclusión entre
-procesos, pérdida de propietario, IPC ausente sin fallback, lectura cacheada sin
-petición, versiones y timestamps estables, primer snapshot, histórico persistido,
-lote vacío válido frente a fallo/sin datos, calidad parcial y duplicados.
-Verificar intervalos entre inicios, backoff creciente, recuperación escalonada,
-Retry-After fecha/segundos/pasado/en éxito, reinicio sin reset de restricciones,
-sin demanda y reanudación sin ráfagas. Un fallo conserva datos y no llama catálogo
-con vacío. 108 de GetMobileList no cambia disponibilidad de RenderExcel.
+Un único hilo ejecuta `Coordinator.tick()`. El método también permite pruebas
+deterministas con reloj monotónico inyectado. La sección en vuelo permanece
+reservada durante transporte, parsing, publicación y entrega a colas.
 
-Probar Inbox responsivo durante GPS pendiente, cancelación/TTL/owner/generación,
-saturación y una sola respuesta final; igualdad de observación GPS tras distintas
-adquisiciones y ausencia de transiciones desde caché. Cierre: dejar de admitir,
-cancelar tickets, impedir nuevas llamadas, esperar intento en vuelo con plazo,
-descartar publicación tardía, drenar consumidores según plazo y liberar propiedad
-sin permitir solapamiento con otro proceso. El timeout de lectura actual no es
-un deadline global: resolver cancelación/limite total antes del relevo del propietario.
+Intervalo base B = 30 s, configurable, medido entre inicios de intentos después
+de reservar la exclusión. El siguiente inicio debe ser posterior al anterior + B
+y a la finalización del intento en curso. Un intento largo no acumula ciclos:
+solo puede seguirlo un nuevo intento, sin recuperar periodos atrasados.
 
-Secuencia propuesta (cada paso requiere un encargo posterior):
+Ante fallo recuperable, backoff = min(tope, max(B, backoff anterior × 2)).
+El próximo inicio respeta tanto el intervalo base como finalización + backoff.
+Después de un éxito, el backoff se reduce a la mitad mientras supere B;
+al siguiente éxito con backoff <= B se elimina. Tope predeterminado 300 s,
+nunca inferior al intervalo base.
 
-1. Trasladar los acuerdos existentes al incremento; implementar núcleo de scheduling y
-   snapshots con fuentes falsas, manteniendo proveedor oficial inactivo.
-2. Implementar propietario/IPC y exclusión real entre procesos, pruebas de fallo
-   y arranque; habilitar clientes sin acceso directo al proveedor.
-3. Convertir queries en operaciones sobre snapshots y MessageService en consumidor
-   asíncrono; conectar selección, CLI y FleetPolling al mismo coordinador.
-4. Probar puente de modelo y consumidores actuales; retirar todos los timers de
-   adquisición redundantes y verificar regresiones WhatsApp/CLI/vigilancias/collector.
-5. En fases respectivas, completar catálogo, campañas y política Medellín antes
-   de exponer la operación nacional. Nunca ampliar vigilancias por usar una fuente nacional.
-6. Activar únicamente con autorización posterior, pruebas completas, mapping y
-   zona aceptados, política de calidad resuelta, autoridad única demostrada,
-   configuración de 30 s/backoff revisada y plan de reversión controlado. No hacer
-   doble polling para comparar proveedores; tampoco fallback automático operacional.
+Retry-After válido, tanto segundos como fecha HTTP, añade otra restricción;
+se toma el máximo, no se reemplaza por el backoff. No hay reintentos en el
+adaptador, ni una espera fija de 20 s deducida del código 109. Estos tiempos
+son política local, no certificación de límites del proveedor.
 
-## Envoltura pendiente y acuerdos de incrementos posteriores
+Demanda: vigilancia activa, alta pendiente, campaña activa o consulta pendiente.
+Sin demanda no se adquiere. Cambiar a inactivo no reinicia next_start/backoff.
+Una consulta con caché responde con su edad; si tiene al menos B segundos,
+encola un refresco compartido acotado. Así las consultas puntuales también
+renuevan datos sin presentarlos como recién adquiridos. Un refresco explícito
+espera una publicación nueva; los concurrentes comparten el intento.
 
-Permanece sin confirmar si RenderExcel emite la envoltura funcional observada
-en GetMobileList. Esto no bloquea el desarrollo con fakes ni autoriza afirmar
-que se haya observado allí el código 109.
+## Consumidores, pendientes y errores
 
-Acuerdos a trasladar a sus incrementos, no decisiones a reabrir: mecanismo IPC y exclusión/reinicio, persistencia
-mínima del permiso temporal fuera de bases operativas, aceptación de calidad parcial,
-max_age/plazo y capacidad de tickets, tope de backoff y parámetros de recuperación,
-cancelación de transporte al relevar autoridad, límites y conversión temporal/etiquetas.
-Su consolidación documental debe reflejar lo ya decidido por el usuario, sin
-convertir las propuestas técnicas de este documento en requisitos adicionales.
-Mantener aprobados 30 s iniciales, alcance nacional de consultas/campañas,
-vigilancias Medellín, terminación por cambio confirmado y no restauración automática.
+Sin publicación inicial, ubicación, selección por ID y sede reciben aviso de
+inicialización y quedan pendientes. Hay como máximo 100 futures de adquisición,
+100 consultas de MessageService (una por propietario) y 100 altas de vigilancia;
+TTL predeterminado 120 s medido con reloj monotónico. La espera CLI también se
+acota a 120 s y se puede interrumpir. Una consulta reemplazada o cancelada no
+responde tarde: se cancela su future y se verifica la generación de PendingSelections.
+La carrera entre cancelación y publicación se resuelve reclamando el future
+atómicamente antes de completarlo.
+
+Las vigilancias aceptadas son operaciones independientes, como antes: otra
+solicitud de vigilancia no cancela las anteriores. CANCELAR invalida las altas
+pendientes del propietario; las vigilancias ya activas conservan sus comandos
+de gestión. Los selectores tardíos mantienen la validación de generación existente.
+
+FleetPolling recibe versiones en una cola de hasta 100 elementos. Cada versión
+se procesa una vez; una nueva alta que use caché se evalúa sin reprocesar las otras
+vigilancias. Ante saturación se omite la versión intermedia más antigua y se registra
+un aviso seguro; no se bloquea el transporte. El collector recibe un único submit
+por publicación mientras la campaña está activa, incluso si el consumidor de
+vigilancias está ocupado. Leer caché, seleccionar o dar de alta no llama submit.
+Su propia cola y tratamiento de saturación permanecen sin cambios.
+
+| Resultado | Tratamiento central |
+|---|---|
+| HTTP 500, red, timeout, XML o estructura global inválidos | Conservar último válido; backoff y Retry-After cuando exista. |
+| Diagnósticos individuales o identidades duplicadas | Publicar lote y diagnósticos; actualizar filas utilizables y conservar estado anterior afectado con su origen. |
+| HTTP 429 o 109 estructurado | Restricción compartida; no buscar números en texto libre. |
+| 108 / autorización del método | BLOCKED_METHOD; resolver pendientes con error, no reintentar indefinidamente. |
+| Autenticación/configuración y otros errores funcionales terminales | Requieren intervención/reinicio; nunca fallback. |
+| Lectura de caché durante bloqueo | Disponible con acquired_at original; no modifica estado del proveedor. |
+
+FleetPolling conserva el tratamiento existente de fallo terminal de adquisición
+para vigilancias, usando su causa/mensaje existentes. No suspende vencimientos,
+restaura vigilancias ni introduce causas de flota. Nuestra indisponibilidad no
+demuestra una caída general de WideTech. GetMobileList no participa.
+La envoltura real de 109 en RenderExcel sigue sin confirmarse: las pruebas usan
+transporte/respuestas sintéticas y no se presentan como evidencia del proveedor.
+
+## Exclusión entre procesos y cierre
+
+Se elige **ejecución exclusiva verificable**, no IPC. CLI y servidor no pueden
+poseer simultáneamente la autoridad de una misma instalación. Ambos usan
+`GPS_EMI_STATE_DIR/acquisition.lock`. La variable debe ser una ruta absoluta;
+una cadena vacía o relativa impide arrancar. Sin configuración explícita se usa
+`%LOCALAPPDATA%/GPS_EMI` en Windows (o AppData/Local del usuario) y
+`$XDG_STATE_HOME/gps-emi` en Linux (o `~/.local/state/gps-emi`). No depende del
+cwd ni escribe junto al paquete instalado. CLI y servidor deben compartir
+la misma configuración y usuario, o un directorio acordado y accesible a ambos.
+Errores de permisos fallan cerrados; no se intenta otro lock ni elevar privilegios.
+
+Docker configura `/data/state`, dentro del volumen persistente ya montado en
+`/data`. La imagen prepara `/data` con propietario 10001:10001 y modo 700;
+el proceso UID 10001 crea state. Un volumen preexistente o bind mount debe
+tener esos permisos preparados por su administrador: el arranque no los cambia.
+No retirar el volumen al reiniciar, pues contiene el plazo de próxima adquisición.
+
+HostLease mantiene un bloqueo de byte con msvcrt en Windows y flock en Ubuntu.
+No borra el archivo de lock ni cambia su inode. Un segundo proceso falla antes de
+iniciar transporte. Guarda solo la próxima fecha UTC permitida; se reserva antes
+del intento y se amplía con las restricciones recibidas. Al reiniciar, el plazo
+restante se transforma de nuevo en una espera monotónica. Un archivo corrupto o
+fallo al reservar impide adquirir; no se trata como permiso libre.
+
+El lock cubre los entrypoints cooperantes de esta instalación. No coordina otras
+copias, contenedores, herramientas externas ni servidores. No garantiza el estado
+de una petición que siga ejecutándose remotamente tras terminar abruptamente
+el proceso. UTC persistido protege reinicios ordinarios; alterar el reloj del host
+entre procesos requiere intervención operativa. No se afirma liderazgo distribuido.
+
+El runtime se construye antes de iniciar el hilo, para cerrar correctamente si
+falla el arranque de otros componentes. Shutdown marca el coordinador detenido
+antes de esperar consumidores: descarta pendientes y no inicia nuevos intentos.
+close espera hasta 2 s al hilo GPS; si HTTP sigue en curso, conserva el lock hasta
+que ese hilo termine. No intenta matar una petición desde otro hilo. El adaptador
+conserva timeouts de conexión/lectura de fase 1; timeout de lectura no equivale
+a un límite total de una respuesta transmitida lentamente.
+
+## Configuración y activación posterior
+
+La configuración oficial es independiente de GPSPACE_COOKIE. No se cambia .env
+ni se activa RenderExcel por defecto en instalaciones existentes. El modo sin
+`--official` selecciona el transporte legado dentro del mismo coordinador.
+
+| Parámetro | Valor / función |
+|---|---|
+| `--official` | Selecciona exclusivamente RenderExcel para ese proceso. |
+| `GPS_EMI_STATE_DIR` | Directorio absoluto de estado compartido por CLI/servidor; Docker `/data/state`. |
+| `--interval` | Base de adquisición; 30 s por defecto. |
+| `--acquisition-max-backoff` | 300 s por defecto; tope efectivo al menos igual al intervalo. |
+| `WIDETECH_LOGIN`, `WIDETECH_PASSWORD` | Configuración local de autenticación, nunca registrada. |
+| `WIDETECH_TIMEZONE` | America/Bogota por defecto. |
+| `WIDETECH_PLATE_FIELD` | Movil o VEH_NAM, tras verificar la correspondencia real. |
+| `WIDETECH_MOBILE_FIELD` | El otro campo; mapping obligatorio, sin valor inferido. |
+
+Las opciones históricas initial-backoff/max-backoff siguen aceptándose por
+compatibilidad, pero ya no gobiernan bucles de adquisición de consumidores.
+El límite y TTL de pendientes se inyectan mediante AcquisitionConfig; no se añade
+otra configuración operacional implícita.
+
+Propuesta histórica de piloto WhatsApp, **no ejecutada por el agente**:
+El usuario optó después por validar CLI y aplazar WhatsApp para servidor.
+El procedimiento siguiente queda como referencia opcional futura, no como
+requisito pendiente obligatorio para cerrar fase 2:
+
+1. Detener la otra CLI/servidor de la misma instalación.
+2. Proporcionar credenciales y mapping verificado mediante el entorno local seguro.
+3. Verificar que GPS_EMI_STATE_DIR es absoluto, persistente y escribible por el
+   usuario de ejecución. No borrar el lock ni su plazo para acelerar el piloto.
+4. Ejecutar una sola entrada `gps-emi-whatsapp --official --interval 30`, con
+   un supervisor que envíe SIGTERM a los **180 segundos**. Activar una sola
+   vigilancia sobre una identidad previamente acordada para generar demanda.
+   Configurar `GPS_EMI_LOG_SUMMARY_SECONDS=30` para obtener resúmenes dentro
+   del piloto. El plazo limita la admisión de intentos; una petición en curso
+   puede tardar más en cerrar y debe conservar la exclusión hasta terminar.
+   No iniciar CLI simultáneamente ni otras instalaciones con esas credenciales.
+5. Detener antes del límite ante autenticación/autorización fallida, 109/429,
+   errores globales repetidos, identidad ambigua del vehículo piloto, permisos
+   insuficientes o entrega inesperada. Respetar Retry-After y el cierre en vuelo;
+   no reiniciar inmediatamente para evitar la espera persistida.
+6. Revisar únicamente contadores agregados de intentos/éxitos/errores, intervalos,
+   cantidades de filas recibidas/utilizables/conservadas y diagnósticos por código.
+   Para el vehículo acordado comprobar edad GPS, origen de adquisición y ausencia
+   de eventos nuevos cuando sus datos se conservan. No imprimir credenciales,
+   cookies, XML, etiquetas, coordenadas ni la flota completa. Registrar diferencias
+   con las simulaciones; XML válido no certifica cobertura. Verificar mapping,
+   semántica real de Zones y envoltura de errores cuando haya evidencia disponible.
+7. Para volver al modo legado, cerrar ordenadamente y arrancar sin --official.
+   No hay cambios de esquema que revertir en esta fase.
+
+El resumen incluye intentos reales del adaptador, éxitos, errores, duración,
+espera restante, pendientes, estado y edad del snapshot. health es una lectura
+local; el webhook solo valida/encola mensajes. Ni uno ni otro adquiere datos.
+No se registran credenciales, payloads ni filas completas.
+
+## Evidencia de pruebas y archivos
+
+`tests/test_central_acquisition.py` verifica agrupación, múltiples vigilancias y
+campaña, caché, calidad, intervalo, backoff, recuperación gradual, Retry-After,
+108, cierre en vuelo, bloqueo conservado, reinicio sin ubicaciones, dos procesos,
+composición real CLI oficial con transporte falso y carreras de cancelación.
+
+`tests/whatsapp/test_snapshot_pending.py` verifica Inbox libre durante HTTP,
+propietarios aislados, reemplazo, límite/TTL de pendientes, consultas junto con
+vigilancia/campaña y health sin adquisición. `tests/snapshot_fakes.py` ofrece
+relojes/snapshots para las regresiones de negocio; no es código operacional.
+
+Se adaptaron las pruebas de runner, CLI, consultas, selección, múltiples
+vigilancias, collector/campañas, transporte legado y canales. La prueba de importación
+de fase 1 ahora ejecuta un módulo aislado para no invalidar clases usadas por otras
+pruebas. Se prohíben red y time.sleep en el fixture offline; concurrencia se
+sincroniza con eventos, sin sleeps para avanzar intervalos.
+
+Validación Windows: suite completa ejecutada con Python 3.12 del runtime local,
+dependencias de .venv y src en PYTHONPATH. Comando efectivo:
+`python -m pytest -q -p no:cacheprovider --tb=short --basetemp=<directorio nuevo bajo build>`.
+La carpeta padre build se crea primero y el basetemp tiene identificador único.
+El intérprete .venv y la caché anterior presentaban restricciones de acceso;
+no se alteraron permisos ni datos operativos para ejecutar las pruebas.
+
+Resultado de la implementación anterior: **919 aprobadas, 0 fallidas, 21,59 s**.
+Incluye 27 pruebas nuevas del coordinador y pendientes, además de las regresiones
+adaptadas. `git diff --check` terminó sin errores; el índice Git quedó vacío.
+La rama POSIX usa flock y está preparada para Ubuntu; este encargo no ejecutó
+pruebas en Ubuntu ni validaciones autenticadas contra WideTech.
+
+Revisión de los dos hallazgos (9 de octubre de 2026): las pruebas nuevas están en
+`tests/test_phase2_findings.py`. Incluyen lotes mixtos, opcionales inválidos,
+duplicados, Zones ausente/nil, procedencia conservada, XML truncado/estructura
+inválida, caché/collector, permisos denegados simulados, estado corrupto y procesos
+con cwd diferentes. Las pruebas centrales existentes cubren reinicio con plazo
+persistido y lock retenido durante una petición en curso.
+
+Docker CLI está instalado, pero `docker version` no pudo conectar al pipe
+`dockerDesktopLinuxEngine` porque no existe. Quedan sin verificar en contenedor
+el arranque UID 10001, creación/escritura de `/data/state`, persistencia del volumen,
+permisos POSIX y exclusión flock entre procesos. No se arrancó Docker ni se desplegó.
+Los tests offline no constituyen validación contra WideTech.
+
+Resultado de este cierre: **41 pruebas específicas aprobadas en 6,99 s** y
+**933 pruebas de regresión aprobadas en 26,71 s**, sin fallos. Incluye CLI,
+WhatsApp, vigilancias y collector. `git diff --check` limpio; índice sin cambios.
+La denegación de permisos se prueba mediante PermissionError inyectado, sin
+alterar ACL del equipo. No se verificaron permisos reales Linux/UID 10001.
+No se modificó el .env operativo, no hubo llamadas autenticadas, commit ni push.
+
+Archivos del cierre de estos dos hallazgos (los demás cambios previos se conservan):
+`Dockerfile`, `compose.yaml`, este documento, `src/gps_emi/acquisition.py`,
+`src/gps_emi/acquisition_runtime.py`, `src/gps_emi/queries.py`,
+`src/gps_emi/formatting.py`, `src/gps_emi/whatsapp/formatting.py`,
+`src/gps_emi/monitoring/fleet_polling.py`, `src/gps_emi/monitoring/runner.py`,
+`tests/test_central_acquisition.py` y `tests/test_phase2_findings.py`.
+
+## Reconciliación documental y commit selectivo — 9 de octubre de 2026
+
+**Evidencia manual reportada por el usuario:** consultas CLI por móvil y placa,
+consultas por sede y arranque de vigilancia con diagnóstico STALE. Se registra
+como reporte del usuario, no como ejecución o inspección directa del agente.
+No acredita llegada real, entrega WhatsApp, cobertura nacional, Docker ni Ubuntu.
+WhatsApp queda aplazado para validación en servidor; no se inició en este encargo.
+
+La documentación general se contrastó con AcquisitionRuntime, Coordinator,
+SnapshotSource, entrypoints, consumidores y pruebas. No se modifican acuerdos
+CAT, DAT, VIG o APL, ni se aprueban propuestas sobre altas de vehículos ausentes
+o inclusión en selectores. TEC-01 permanece pendiente para fase 3; TEC-07 se
+registra resuelto mediante exclusión local sin coordinación entre hosts.
+
+Regresión offline ejecutada para este cierre: **933 aprobadas, 0 fallidas,
+25,69 s**, con Python 3.12 del runtime local, dependencias .venv y src en
+PYTHONPATH; `pytest -q -p no:cacheprovider --tb=short` y basetemp nuevo bajo
+build. Las cifras anteriores conservan su procedencia histórica. El commit incluye implementación,
+pruebas y documentación de fase 2 y el registro aprobado, excluyendo auditoría,
+prompt histórico, .codemapignore y artefactos operativos. No hay push, nuevas
+llamadas a WideTech, cambios al .env ni despliegue.
+
+## Pendientes por fase
+
+- **Fase 3:** catálogo nacional persistente, consultas nacionales, reclasificación,
+  desapariciones/reapariciones y mayor detección semántica de parcialidad.
+- **Fase 4:** campañas nacionales, nuevas reglas de deduplicación/históricos,
+  continuidad, frontera exacta de admisión, SQLite aditivo y CSV extendido.
+- **Fase 5:** datos antiguos como impedimento de llegada, interrupción/recuperación,
+  confirmaciones y contabilidad/suspensión del vencimiento.
+- **Fase 6:** retención técnica, validación Ubuntu, respaldo, despliegue y reversión.
+- **Limitación externa:** envoltura real de errores RenderExcel y cuota efectiva.
+
+Los acuerdos anteriores permanecen aprobados. Esta lista asigna implementación;
+no vuelve a solicitar sus decisiones.

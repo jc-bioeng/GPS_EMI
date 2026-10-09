@@ -45,8 +45,8 @@ def identifier_key(value: str) -> str:
 def resolve_vehicle(vehicles: Iterable[Vehicle], identifier: str) -> VehicleResolution:
     """Coincidencia en ambos campos con alias AMB20/AMB-20, sin prioridades.
 
-    La colección debe provenir de WideTechClient.get_vehicles(), que aplica el
-    filtro de flota. Una fila que coincida en ambos campos cuenta una sola vez.
+    La colección operacional es la proyección filtrada del snapshot compartido.
+    Una fila que coincida en ambos campos cuenta una sola vez.
     """
     key = identifier_key(identifier)
     matches = [vehicle for vehicle in vehicles if key and any(

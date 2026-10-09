@@ -1,3 +1,4 @@
+from snapshot_fakes import snapshot_reader, ScriptedSnapshots
 from dataclasses import replace
 from datetime import datetime, timedelta
 from threading import Event
@@ -30,7 +31,7 @@ def vehicle(seconds=0, inside=False):
 @pytest.mark.parametrize('speed,expected', [(0, 'Detenida'), (37, 'En movimiento'), (None, 'N/D')])
 @pytest.mark.parametrize('age,stale', [(43, False), (300, False), (301, True), (7200, True)])
 def test_location_format_reuses_i3(speed, expected, age, stale):
-    source = Mock()
+    source = snapshot_reader(Mock())
     source.get_vehicles.return_value = [replace(vehicle(), speed=speed)]
     result = get_vehicle_location(source, 'AMB-20', now=lambda: BASE + timedelta(seconds=age))
     text = format_location(result)
@@ -44,7 +45,7 @@ def test_location_format_reuses_i3(speed, expected, age, stale):
 
 
 def test_missing_fields_and_fix_zero():
-    source = Mock()
+    source = snapshot_reader(Mock())
     source.get_vehicles.return_value = [Vehicle('1', '', gps_fix=0, mobile_number='MOVIL- 96')]
     result = get_vehicle_location(source, 'MOVIL- 96', now=lambda: BASE)
     text = format_location(result)
@@ -56,7 +57,7 @@ def test_missing_fields_and_fix_zero():
 
 
 def test_inventory_reuses_order_and_conservative_freshness():
-    source = Mock()
+    source = snapshot_reader(Mock())
     source.get_vehicles.return_value = [replace(vehicle(0, True), mobile_number='OLD'),
         replace(vehicle(560, True), mobile_number='FRESH'),
         replace(vehicle(0, True), gps_timestamp=None, mobile_number='UNKNOWN')]
@@ -107,12 +108,12 @@ def test_text_arrival_outside_window_retains_event(wa_config, messenger):
 @pytest.mark.parametrize('identifier', ['AMB-20', 'PJU886'])
 def test_runner_confirmation_recovery_and_arrival_send_failure_keeps_state(wa_config, messenger, identifier):
     messenger.client.send_template.side_effect = WhatsAppError('timeout')
-    source = Mock()
+    source = snapshot_reader(Mock())
     source.get_vehicles.side_effect = [[vehicle()], TransientAcquisitionError(),
                                      [vehicle(-1, True)], [vehicle(0, True)], [vehicle(60, True)]]
     notifier = WhatsAppNotifier(NUMBER, messenger, wa_config)
     confirmed, sleep = Mock(), Mock()
-    runner = WatchRunner(source, identifier, None, notifier, sleep=sleep,
+    runner = WatchRunner(ScriptedSnapshots(source), identifier, None, notifier, sleep=sleep,
                          now=lambda: BASE + timedelta(minutes=5), on_resolved=confirmed)
     assert runner.run() == 0
     confirmed.assert_called_once_with(vehicle())
@@ -126,13 +127,13 @@ def test_runner_confirmation_recovery_and_arrival_send_failure_keeps_state(wa_co
 @pytest.mark.parametrize('phase', ['before', 'request', 'polling', 'backoff'])
 def test_runner_cooperative_shutdown(phase):
     stop = Mock()
-    stop.is_set.side_effect = [True] if phase == 'before' else [False, True] if phase == 'request' else [False, False]
+    stop.is_set.side_effect = [True] if phase == 'before' else [False, True] if phase == 'request' else [False, False, True]
     stop.wait.return_value = True
-    source = Mock()
+    source = snapshot_reader(Mock())
     source.get_vehicles.side_effect = TransientAcquisitionError() if phase == 'backoff' else None
     source.get_vehicles.return_value = [vehicle()]
     notifier = Mock()
-    runner = WatchRunner(source, 'AMB-20', None, notifier, stop_event=stop)
+    runner = WatchRunner(ScriptedSnapshots(source), 'AMB-20', None, notifier, stop_event=stop)
     assert runner.run() == 130
     notifier.send_arrival.assert_not_called()
     if phase == 'before':
@@ -142,22 +143,26 @@ def test_runner_cooperative_shutdown(phase):
 def test_manager_accepts_pending_watches_during_acquisition(wa_config, messenger):
     messenger.windows.note(NUMBER, 1000000)
     started, release = Event(), Event()
-    source = Mock()
+    source = snapshot_reader(Mock())
     def acquire():
         started.set()
         assert release.wait(timeout=2)
         return [vehicle()]
     source.get_vehicles.side_effect = acquire
-    manager = WatchManager(lambda: source, messenger, wa_config)
+    snapshots = ScriptedSnapshots(source)
+    manager = WatchManager(lambda: snapshots, messenger, wa_config)
     assert manager.start(NUMBER, 'AMB-20')
+    snapshots.coordinator.start()
     try:
         assert started.wait(timeout=1)
         assert manager.start(NUMBER, 'PJU886')
         assert manager.active
     finally:
+        snapshots.coordinator.request_stop()
         manager.stop_event.set()
         release.set()
         assert manager.close(timeout=1)
+        assert snapshots.coordinator.close(timeout=1)
     assert not manager.active and not manager.start(NUMBER, 'AMB-20')
 
 
@@ -165,14 +170,16 @@ def test_webhook_returns_while_watch_is_blocked(wa_config, messenger):
     # Ningún tiempo real de polling: el reloj está fijado y se sincroniza por eventos.
     from test_webhook import payload, post
     started, release = Event(), Event()
-    source = Mock()
+    source = snapshot_reader(Mock())
     def acquire():
         started.set()
         assert release.wait(timeout=2)
         return [vehicle()]
     source.get_vehicles.side_effect = acquire
-    manager = WatchManager(lambda: source, messenger, wa_config)
-    service = MessageService(wa_config, messenger, manager, lambda: source)
+    snapshots = ScriptedSnapshots(source)
+    manager = WatchManager(lambda: snapshots, messenger, wa_config)
+    service = MessageService(wa_config, messenger, manager, lambda: snapshots)
+    snapshots.coordinator.start()
     inbox = Inbox(service.handle, now=lambda: 0)
     client = create_app(wa_config, inbox).test_client()
     try:
@@ -184,9 +191,11 @@ def test_webhook_returns_while_watch_is_blocked(wa_config, messenger):
         messenger.client.send_menu.assert_called_once_with(NUMBER)
         assert manager.active
     finally:
+        snapshots.coordinator.request_stop()
         manager.stop_event.set()
         release.set()
         manager.close(timeout=1)
+        assert snapshots.coordinator.close(timeout=1)
         inbox.close(timeout=0)
 
 
@@ -194,7 +203,7 @@ def test_webhook_returns_while_watch_is_blocked(wa_config, messenger):
     ([vehicle(), vehicle()], 'ambiguo')])
 def test_manager_reports_resolution_error_without_false_start(wa_config, messenger, rows, expected):
     messenger.windows.note(NUMBER, 1000000)
-    source = Mock()
+    source = snapshot_reader(Mock())
     source.get_vehicles.return_value = rows
     manager = WatchManager(lambda: source, messenger, wa_config)
     manager.start(NUMBER, 'AMB-20')
@@ -211,7 +220,7 @@ def test_manager_shared_polling_confirmation_then_arrival(wa_config, messenger, 
     messenger.windows.note(NUMBER, 1000000)
     if confirmation_fails:
         messenger.client.send_text.side_effect = WhatsAppError('connection')
-    source = Mock()
+    source = snapshot_reader(Mock())
     source.get_vehicles.side_effect = [[vehicle()], [vehicle(60, True)]]
     manager = WatchManager(lambda: source, messenger, wa_config, autostart=False)
     try:
@@ -233,14 +242,15 @@ def test_manager_shared_polling_confirmation_then_arrival(wa_config, messenger, 
 def test_thread_start_failure_releases_slot(wa_config, messenger):
     thread = Mock()
     thread.start.side_effect = RuntimeError('synthetic failure')
-    manager = WatchManager(Mock(), messenger, wa_config, thread_factory=Mock(return_value=thread))
+    manager = WatchManager(Mock(return_value=snapshot_reader(Mock())), messenger, wa_config,
+                           thread_factory=Mock(return_value=thread))
     with pytest.raises(RuntimeError):
         manager.start(NUMBER, 'AMB-20')
     assert not manager.active
 
 
 def test_accepted_watch_can_be_followed_by_new_watch(wa_config, messenger):
-    source = Mock()
+    source = snapshot_reader(Mock())
     source.get_vehicles.return_value = []
     messenger.windows.note(NUMBER, 1000000)
     manager = WatchManager(lambda: source, messenger, wa_config)

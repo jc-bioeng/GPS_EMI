@@ -1,3 +1,4 @@
+from snapshot_fakes import snapshot_reader, ScriptedSnapshots
 from dataclasses import replace
 from datetime import datetime, timedelta
 from unittest.mock import Mock
@@ -22,7 +23,7 @@ BASE = datetime(2026,9,22,12)
 
 @pytest.fixture
 def runtime(wa_config, messenger):
-    source = Mock()
+    source = snapshot_reader(Mock())
     source.get_vehicles.return_value = [Vehicle('1','PJU886',BASE,mobile_number='AMB-20'),
                                          Vehicle('2','QTQ899',BASE,mobile_number='AMB-18')]
     watches = WatchManager(lambda: source,messenger,wa_config,autostart=False)

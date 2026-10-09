@@ -7,7 +7,7 @@ from gps_emi.errors import (
     AcquisitionError, TransientAcquisitionError, SessionExpiredError,
     InvalidResponseError, HTTPAcquisitionError, MissingCredentialsError,
 )
-from gps_emi.providers.widetech import WideTechClient
+from gps_emi.providers.widetech import LegacyWideTechTransport as WideTechClient
 
 
 @pytest.fixture

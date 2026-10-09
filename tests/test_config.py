@@ -1,3 +1,4 @@
+from snapshot_fakes import snapshot_reader, ScriptedSnapshots
 from unittest.mock import Mock
 from datetime import datetime, timedelta
 import logging
@@ -68,7 +69,7 @@ def test_cli_logging_and_recovery_end_to_end_without_network(monkeypatch, capsys
     def injected_watch(*args, **kwargs):
         return original_watch(*args, **kwargs, sleep=sleep)
     monkeypatch.setattr(cli, 'watch', injected_watch)
-    monkeypatch.setattr(cli, 'WideTechClient', lambda: client)
+    monkeypatch.setattr(cli, 'AcquisitionRuntime', lambda **kwargs: Mock(source=ScriptedSnapshots(client)))
     monkeypatch.setattr(cli, 'configure_logging', real_configure_logging)
     try:
         assert cli.main(['--identifier', 'AMB-20', '--destination', DESTINATIONS[0]]) == 0
@@ -79,7 +80,7 @@ def test_cli_logging_and_recovery_end_to_end_without_network(monkeypatch, capsys
         assert output.count('ARRIVAL_DETECTED') == 1
         assert 'PJU886 llegó a' in output
         assert 'Vigilancia completada.' in output
-        assert [call.args[0] for call in sleep.call_args_list] == [30, 5]
+        sleep.assert_not_called()  # La planificación pertenece al coordinador.
     finally:
         for handler in list(logger.handlers):
             if handler not in original_handlers:

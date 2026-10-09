@@ -1,3 +1,4 @@
+from snapshot_fakes import snapshot_reader, ScriptedSnapshots
 from dataclasses import replace
 from datetime import timedelta
 from unittest.mock import Mock
@@ -21,7 +22,7 @@ NUMBER = '15555550101'
 
 @pytest.fixture
 def runtime(wa_config,messenger):
-    source = Mock()
+    source = snapshot_reader(Mock())
     source.get_vehicles.return_value = list(candidates())
     watches = WatchManager(lambda:source,messenger,wa_config,autostart=False)
     service = MessageService(wa_config,messenger,watches,lambda:source)

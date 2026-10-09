@@ -120,7 +120,7 @@ class WatchManager:
                 if watch.status == WatchStatus.ACTIVE:
                     watch.status = WatchStatus.CANCELLED
 
-    def process_snapshot(self, vehicles, *, observed_at=None):
+    def process_snapshot(self, vehicles, *, observed_at=None, watch_ids=None):
         now = observed_at if observed_at is not None else self.now()
         index = {}
         for vehicle in vehicles:
@@ -130,6 +130,8 @@ class WatchManager:
             if self.closed:
                 return []
             for watch in self._watches.values():
+                if watch_ids is not None and watch.watch_id not in watch_ids:
+                    continue
                 if watch.status != WatchStatus.ACTIVE:
                     continue
                 rows = index.get(watch.vehicle_id, [])

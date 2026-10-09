@@ -1,3 +1,4 @@
+from snapshot_fakes import ScriptedSnapshots
 from dataclasses import replace
 from datetime import datetime, timedelta
 import logging
@@ -28,7 +29,7 @@ def make_runner(sequence, **kwargs):
     client.get_vehicles.side_effect = [
         [item] if isinstance(item, Vehicle) else item for item in sequence
     ] + [SessionExpiredError()]
-    runner = WatchRunner(client, 'AMB-20', DESTINATION, notifier,
+    runner = WatchRunner(ScriptedSnapshots(client, interval=(kwargs.get("config") or WatchConfig()).polling_interval), 'AMB-20', DESTINATION, notifier,
                          sleep=sleep, now=lambda: NOW, **kwargs)
     return runner
 
@@ -56,7 +57,7 @@ def test_errors_preserve_state(initial_inside, final_inside, expected_events, ob
     expected_state = (MonitorState.ARRIVAL_DETECTED if expected_events else
                       MonitorState.INSIDE if final_inside else MonitorState.OUTSIDE)
     assert runner.monitor.state == expected_state
-    assert [call.args[0] for call in runner.sleep.call_args_list][:2] == [30, 5]
+    runner.sleep.assert_not_called()
 
 
 def test_network_and_http_errors_never_observe(observations):
@@ -72,9 +73,7 @@ def test_backoff_cap_recovery_counter_and_normal_polling(caplog):
     runner = make_runner([*[TransientAcquisitionError() for _ in range(5)],
                           report(), TransientAcquisitionError(), report(60)])
     assert runner.run() == 1
-    assert [call.args[0] for call in runner.sleep.call_args_list] == [5, 10, 20, 30, 30, 30, 5, 30]
-    assert runner.consecutive_failures == 0
-    assert runner._next_backoff == 5
+    runner.sleep.assert_not_called()
     recovery = [record for record in caplog.records if 'Adquisición recuperada' in record.message]
     assert len(recovery) == 2
     assert all(record.levelno == logging.INFO for record in recovery)
@@ -85,7 +84,7 @@ def test_configurable_backoff_and_interval():
                           TransientAcquisitionError(), report()],
                          config=WatchConfig(polling_interval=11, initial_backoff=2, max_backoff=3))
     assert runner.run() == 1
-    assert [call.args[0] for call in runner.sleep.call_args_list] == [2, 3, 3, 11]
+    runner.sleep.assert_not_called()
 
 
 def test_session_expired_terminates_without_retry(caplog):
@@ -93,9 +92,9 @@ def test_session_expired_terminates_without_retry(caplog):
     assert runner.run() == 1
     runner.sleep.assert_not_called()
     runner.notifier.send_arrival.assert_not_called()
-    assert runner.client.get_vehicles.call_count == 1
+    assert runner.client.transport.get_vehicles.call_count == 1
     assert runner.monitor is None
-    assert any(record.levelno == logging.ERROR and 'sesión' in record.message for record in caplog.records)
+    assert runner.client.coordinator.blocked
 
 
 def test_stale_and_gpsfix_zero_do_not_discard_new_observation(caplog):
@@ -141,7 +140,7 @@ def test_old_or_duplicate_reports_cannot_trigger_arrival(sequence, observations)
     assert [v.gps_timestamp for v in observations] == [BASE, BASE + timedelta(minutes=1)]
     runner.notifier.send_arrival.assert_called_once()
     assert runner.validator.last_processed_gps_timestamp == BASE + timedelta(minutes=1)
-    assert runner.client.get_vehicles.call_count == len(sequence)
+    assert runner.client.transport.get_vehicles.call_count == len(sequence)
 
 
 def test_out_of_order_warning_and_duplicate_debug(caplog):
@@ -160,9 +159,9 @@ def test_temporarily_missing_vehicle_reappears(initial_inside, expected_events, 
     assert runner.run() == (0 if expected_events else 1)
     assert len(observations) == 2
     assert runner.notifier.send_arrival.call_count == expected_events
-    assert [c.args[0] for c in runner.sleep.call_args_list][:3] == [30, 5, 10]
+    runner.sleep.assert_not_called()
     assert 'temporalmente ausente' in caplog.text
-    assert 'Adquisición recuperada' in caplog.text
+    assert 'temporalmente ausente; estado conservado' in caplog.text
 
 
 def test_tracks_vehid_despite_identifier_changes_and_reuse():
@@ -201,7 +200,7 @@ def test_ctrl_c_at_each_stage(stage, caplog):
     runner = make_runner([KeyboardInterrupt()] if stage == 'request' else
                          [TransientAcquisitionError()] if stage == 'backoff' else [report()])
     if stage != 'request':
-        runner.sleep.side_effect = KeyboardInterrupt()
+        runner.client.transport.get_vehicles.side_effect = ([TransientAcquisitionError(), KeyboardInterrupt()] if stage == 'backoff' else [[report()], KeyboardInterrupt()])
     assert runner.run() == 130
     assert 'Vigilancia cancelada.' in caplog.text
     assert 'Traceback' not in caplog.text
@@ -221,7 +220,7 @@ def test_completed_runner_never_notifies_twice():
     runner = make_runner([report(), report(60, True)])
     assert runner.run() == runner.run() == 0
     runner.notifier.send_arrival.assert_called_once()
-    assert runner.client.get_vehicles.call_count == 2
+    assert runner.client.transport.get_vehicles.call_count == 2
 
 
 def test_notification_failure_is_not_retried(caplog):
@@ -245,5 +244,5 @@ def test_recovery_on_duplicate_restores_interval_and_resets_backoff():
     runner = make_runner([report(), TransientAcquisitionError(), report(),
                           TransientAcquisitionError(), report(60, True)])
     assert runner.run() == 0
-    assert [call.args[0] for call in runner.sleep.call_args_list] == [30, 5, 30, 5]
-    assert runner.consecutive_failures == 0
+    runner.sleep.assert_not_called()
+    assert runner.client.coordinator.backoff == 0
