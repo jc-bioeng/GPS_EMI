@@ -76,13 +76,61 @@ La zona configurada es una decisión de interpretación de la aplicación; no de
 | VIG-04 | Recuperación tras interrupción con **tres observaciones genuinamente nuevas** para confirmar presencia. |
 | VIG-05 | Emitir una única notificación de presencia confirmada en recuperación. No presentarla como si se conociera el instante exacto de llegada. |
 | VIG-06 | Máxima inactividad de **doce horas configurable**; finalizar al superar el plazo. |
-| VIG-07 | Suspender el cómputo de vencimiento mientras esté confirmada la caída general de WideTech. |
+| VIG-07 | Suspender el cómputo de vencimiento durante una interrupción de la adquisición compartida detectada internamente, sin atribuirla a una caída general de WideTech. Revisión aprobada el 11 de octubre de 2026; reglas abajo. |
 | VIG-08 | No restaurar automáticamente vigilancias tras reinicio. |
 | VIG-09 | Cambios de nombre no alteran vigilancias vinculadas a `VEH_ID`. |
 | VIG-10 | Datos antiguos no generan llegadas. Esto modifica la política anterior, donde STALE era solo diagnóstico. |
 | VIG-11 | **Cambio confirmado a otra flota termina la vigilancia activa**, según aclaración posterior del usuario. Flota ausente o respuesta inválida no demuestra cambio confirmado. |
 
 Registrar internamente la causa de terminación. La notificación proactiva de esa causa por WhatsApp está aplazada; no confundirla con la notificación de presencia recuperada, que sí está aprobada.
+
+### Revisión aprobada de VIG-07 — 11 de octubre de 2026
+
+El usuario sustituyó el requisito de confirmar una caída general de WideTech por
+el tratamiento interno de la interrupción de adquisición. No se requiere una
+confirmación manual del operador ni consultas auxiliares a GetMobileList u otros
+métodos para atribuir la causa.
+
+| Situación | Tratamiento aprobado |
+|---|---|
+| Timeout, error de conexión, HTTP fallido o respuesta imposible de interpretar | Pausar el cómputo de vencimiento mientras no se restablezca la adquisición; mantener el backoff central. |
+| Respuesta válida, pero una ambulancia no transmite GPS nuevo | Continuar su cómputo individual de inactividad. |
+| Respuesta válida con GPS repetidos en toda la flota | No declarar interrupción de adquisición por la repetición; no demuestra indisponibilidad. |
+| Autenticación o permisos denegados identificables | Prevalece el tratamiento terminal existente; requiere intervención, no una pausa indefinida. |
+
+El tratamiento terminal existente tiene prioridad sobre la regla genérica de
+HTTP fallido: esta revisión no convierte errores terminales de autenticación,
+permisos, configuración u otros errores funcionales terminales en pausas.
+
+La pausa comienza en el primer intento fallido recuperable de adquisición y termina
+al publicar nuevamente un snapshot válido; no se retrotrae a la última observación GPS. Una adquisición
+exitosa no reinicia por sí sola la inactividad individual. La pausa afecta al
+cómputo de vencimiento de vigilancias, no extiende campañas ni restaura vigilancias.
+No se añade un vencimiento alternativo para pausas prolongadas.
+
+Las doce horas de VIG-06 se computan descontando esos intervalos de pausa, sin
+cambiar el valor configurado. Recuperar la adquisición no equivale a recuperar
+el GPS de cada vehículo: siguen vigentes los cinco minutos de VIG-03, las tres
+observaciones nuevas de VIG-04, la notificación diferenciada de VIG-05 y la
+prohibición de generar llegadas con datos antiguos de VIG-10. Tampoco se modifica
+TEC-01: los fallos reinician los contadores provisionales de ausencia del catálogo.
+
+Los errores de persistencia local conservan su categoría propia y no demuestran
+un fallo de WideTech. La revisión inicial no resolvía su efecto sobre la pausa.
+**Aprobación posterior expresa del usuario, 11 de octubre de 2026:** pausar también
+cuando la persistencia local impida publicar, hasta una nueva publicación válida.
+No se cambia su categoría `persistence` ni se atribuye el fallo al proveedor.
+
+**TEC-05, aprobación expresa en el mismo encargo:** tras interrupción, tres GPS
+nuevos y frescos consecutivos en la misma sede confirman presencia y terminan la
+vigilancia con una sola notificación diferenciada. Exterior fresco devuelve al
+seguimiento normal; cambio de sede reinicia la secuencia. Duplicados no suman;
+otra interrupción borra la secuencia. La confirmación no conoce la hora de llegada.
+Pertenencia simultánea a varias sedes no elige una: reinicia la secuencia de sede
+única. Ausentes, inválidos y atrasados no aportan confirmaciones ni actividad.
+
+La implementación y evidencia de estos acuerdos están separadas en
+[fase 5](widetech-official-phase5.md). No constituyen validación externa.
 
 Preservar funcionalidad existente de WhatsApp no significa congelar los comportamientos expresamente modificados aquí: consultas nacionales, restricción Medellín, tratamiento de datos antiguos y recuperación se integran y prueban en sus fases correspondientes.
 
@@ -147,8 +195,8 @@ Las pruebas acompañan cada fase. La fase 6 no es el primer momento para probar.
 | TEC-02 | Mapping y normalización de etiquetas y nombres reales de flota | 1–3 | `VEH_ID`, prefijo Ambulancias y cobertura Medellín ya están aprobados. Falta verificar correspondencia exacta Movil/VEH_NAM y variantes observadas, sin deducir placa por formato. |
 | TEC-03 | Identidad de observación/deduplicación y colisiones de timestamp | 4 (resuelto localmente) | Clave proveedor/VEH_ID/instante/contenido GPS; Id solo referencia. Igual instante con otro contenido se conserva y marca. Asociación entre campañas sin duplicar GPS. Véase [fase 4](widetech-official-phase4.md). |
 | TEC-04 | Admisión de lotes y drenaje de escrituras al terminar campaña | 4 (resuelto localmente) | Inicio HTTP posterior al inicio de campaña; admisión durable serializada con stop/vencimiento. Encolar no autoriza escritura. Los lotes admitidos se completan sin extender plazo. Véase [fase 4](widetech-official-phase4.md). |
-| TEC-05 | Secuencia exacta de confirmación tras interrupción | 5 | Tres observaciones nuevas y una notificación ya están aprobadas. Falta precisar reinicio de la secuencia, observaciones exteriores y estado posterior a la notificación. |
-| TEC-06 | Criterio de caída general confirmada y contabilidad del vencimiento | 5 | No equiparar automáticamente un HTTP 500, credenciales inválidas o fallo local con caída general de WideTech. |
+| TEC-05 | Secuencia exacta de confirmación tras interrupción | 5 (aprobada el 11 de octubre) | Tres GPS nuevos y frescos consecutivos en la misma sede, una presencia confirmada y finalización. Exterior fresco vuelve al seguimiento normal; cambio de sede u otra interrupción reinicia secuencia; duplicados no suman. Véase aprobación arriba y [fase 5](widetech-official-phase5.md). |
+| TEC-06 | Interrupción de adquisición y contabilidad del vencimiento | 5 (criterio aprobado el 11 de octubre) | Aplicar VIG-07 revisado: pausa desde el primer intento fallido recuperable de adquisición hasta nueva publicación válida; repetición GPS no es caída y errores terminales conservan su tratamiento. Aprobación posterior expresa: persistencia local también pausa, conservando categoría propia. Implementación monotónica y evidencia en [fase 5](widetech-official-phase5.md), sin duplicar intervalos ni descontar tiempo anterior al alta. |
 | TEC-07 | Mecanismo de autoridad única entre CLI y servidor/procesos | 2 | Resuelto en fase 2 mediante exclusión local verificable, sin IPC; CLI y servidor no operan simultáneamente con el mismo directorio de estado. No cubre otros hosts. Véase [especificación](widetech-official-phase2-spec.md). |
 | TEC-08 | Inventario de registros técnicos sujetos a retención y reversión de esquema | 4–6 (avance fase 4) | Esquema v3, claves y asociaciones históricas permanentes; marcas de admisión/runtime técnicas. Reversión exige binario y backup compatibles, sin bajar user_version. Retención automática sigue fase 6. Véase [fase 4](widetech-official-phase4.md). |
 
@@ -174,6 +222,10 @@ sobre mostrar ausentes en selectores o bloquear nuevas vigilancias por ese estad
 Fase 3 quedó versionada en `a171b37` antes de continuar fase 4. La implementación
 local de [fase 4](widetech-official-phase4.md) concreta TEC-03/04 y la parte de TEC-08
 necesaria, sin modificar los acuerdos ni acreditar despliegue o proveedor real.
+Fase 4 quedó versionada en `18d2661`. La [fase 5 local](widetech-official-phase5.md)
+aplica VIG-01–11 y concreta TEC-05/06 con las aprobaciones expresas registradas
+arriba: 1022 pruebas offline aprobadas en el cierre, sin commit ni despliegue.
+Su evidencia no acredita WideTech real, entrega WhatsApp ni Docker/Ubuntu.
 
 ## Evidencia externa y cierre de errores de fase 1
 

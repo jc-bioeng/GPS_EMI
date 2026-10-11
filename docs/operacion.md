@@ -1,6 +1,6 @@
 # Manual de operación
 
-Revisión del 9 de octubre de 2026, reconciliada con fase 4 local. Estos comandos son instrucciones para el
+Revisión del 11 de octubre de 2026, reconciliada con fase 5 local. Estos comandos son instrucciones para el
 operador; documentarlos no implica ejecutarlos ni certificar un despliegue.
 Consultar [arquitectura](guia-del-sistema.md) y [estado de implementación](README.md).
 
@@ -78,6 +78,32 @@ Si el móvil ya está dentro, el aviso inicial describe esa situación y ofrece
 cancelar; no constituye una llegada. Mantenerla requiere observar una salida
 antes de una futura entrada. `DETENER` permite escoger una vigilancia propia.
 Un envío aceptado por Meta no prueba recepción en el teléfono.
+
+## Continuidad y vencimiento de vigilancias
+
+CLI y servidor aceptan `--watch-inactivity-seconds 43200`: positivo y finito,
+predeterminado doce horas. Se aplica al iniciar el proceso; no cambia .env.
+El origen es el alta local y después cada GPS nuevo y fresco aceptado, medido
+con reloj monotónico. Datos iniciales antiguos/ausentes no vencen retroactivamente.
+Se vence al **superar**, no igualar, el límite efectivo. Causa interna inactivity;
+no se incorpora un nuevo aviso WhatsApp de finalización.
+
+GPS de más de 300 segundos no puede causar llegada ni renovar actividad.
+`--stale-warning-seconds` solo ajusta la advertencia, no esa barrera de seguridad.
+A los 300 segundos sin actividad empieza interrupción individual. Tres GPS nuevos
+y frescos en una misma sede confirman presencia, avisan una vez y terminan. Un
+exterior fresco devuelve al seguimiento normal. No se afirma hora de llegada.
+
+Fallos recuperables de adquisición y persistencia local pausan el vencimiento
+hasta publicar un snapshot válido, sin cambiar su categoría ni atribuir caída
+al proveedor. Repetir GPS no pausa. Errores terminales prevalecen. Mientras un
+intento está pendiente se difiere la decisión de vencer hasta conocer su resultado;
+no se añade HTTP ni un límite alternativo de pausa. Campañas conservan su fin original.
+
+La presencia confirmada se envía como texto específico por Messenger, también en
+modo de llegada template. Si la ventana está cerrada, queda fallida y no se
+reintenta ni se sustituye por la plantilla de llegada. Aceptación no es entrega.
+Estado, contabilidad y evidencia: [fase 5](widetech-official-phase5.md).
 
 ## Sesiones de recolección
 

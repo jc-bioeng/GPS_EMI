@@ -34,6 +34,8 @@ def main(argv=None):
     parser.add_argument("--initial-backoff", type=float, default=5)
     parser.add_argument("--max-backoff", type=float, default=30)
     parser.add_argument("--stale-warning-seconds", type=float, default=300)
+    parser.add_argument("--watch-inactivity-seconds", type=float, default=43200,
+                        help="Vencimiento por inactividad individual, segundos (43200)")
     args = parser.parse_args(argv)
     configure_logging(None)
     started = time.monotonic()
@@ -43,7 +45,7 @@ def main(argv=None):
     shutdown = Shutdown()
     try:
         shutdown.install()
-        watch_config = WatchConfig(args.interval, args.initial_backoff, args.max_backoff, args.stale_warning_seconds)
+        watch_config = WatchConfig(args.interval, args.initial_backoff, args.max_backoff, args.stale_warning_seconds, args.watch_inactivity_seconds)
         load_dotenv(dotenv_path=".env", override=False)
         configure_logging(None)
         config = WhatsAppConfig.from_env()

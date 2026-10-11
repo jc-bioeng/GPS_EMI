@@ -6,12 +6,14 @@ from enum import Enum
 import logging
 from threading import RLock
 from uuid import uuid4
+import time
+from .continuity import Continuity
 
 from gps_emi.config import WatchConfig
 from gps_emi.models import Vehicle, ArrivalEvent
 from gps_emi.catalog import MEDELLIN_FLEETS
 from .arrival import ArrivalMonitor
-from .observation import ObservationAssessment, ObservationValidator, ObservationStatus, observe_resolved_vehicle, gps_fix_warning
+from .observation import ObservationAssessment, ObservationValidator, ObservationStatus, gps_fix_warning
 from . import runner
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,7 @@ class WatchStatus(str, Enum):
     ACTIVE = 'ACTIVE'
     COMPLETED = 'COMPLETED'
     CANCELLED = 'CANCELLED'
+    EXPIRED = 'EXPIRED'
     FAILED = 'FAILED'  # Adquisición terminal o fallo local; nunca equivale a llegada.
 
 
@@ -34,6 +37,7 @@ class Watch:
     created_at: datetime
     notification_target: str
     monitor: ArrivalMonitor
+    continuity: Continuity | None = None
     status: WatchStatus = WatchStatus.ACTIVE
     validator: ObservationValidator = field(default_factory=ObservationValidator)
     last_observation: Vehicle | None = None
@@ -51,10 +55,12 @@ class WatchManager:
     La transición a COMPLETED reserva atómicamente el único intento de envío.
     Cancelación anterior a esa transición gana; después, la llegada ya está tomada.
     """
-    def __init__(self, notify, config=None, *, now=None):
+    def __init__(self, notify, config=None, *, now=None, monotonic=time.monotonic, timing=None):
         self.notify = notify
         self.config = config or WatchConfig()
         self.now = now or runner.local_now
+        self.monotonic = monotonic
+        self.timing = timing or (lambda origin: (self.monotonic()-origin, False))
         self._lock = RLock()
         self._watches = {}
         self.closed = False
@@ -71,6 +77,7 @@ class WatchManager:
             watch = Watch(uuid4().hex, owner_id, vehicle.vehid, vehicle.mobile_number,
                           vehicle.plate, self.now(), notification_target,
                           ArrivalMonitor(vehicle.display_identifier))
+            watch.continuity = Continuity(self.monotonic())
             self._watches[watch.watch_id] = watch
             logger.info('Watch creada watch_id=%s VEHID=%s.', watch.watch_id, watch.vehicle_id)
             return deepcopy(watch), True
@@ -137,6 +144,15 @@ class WatchManager:
                     watch.status, watch.failure_code = WatchStatus.FAILED, 'fleet_changed'
                     logger.info('Watch terminated watch_id=%s reason=fleet_changed', watch.watch_id)
 
+    def tick(self):
+        """Advance local clocks without consuming or requesting a snapshot."""
+        with self._lock:
+            for watch in self._watches.values():
+                if watch.status == WatchStatus.ACTIVE and watch.continuity.tick(
+                        self.monotonic(), self.config, self.timing):
+                    watch.status, watch.failure_code = WatchStatus.EXPIRED, 'inactivity'
+                    logger.info('Watch terminated watch_id=%s reason=inactivity', watch.watch_id)
+
     def process_snapshot(self, vehicles, *, observed_at=None, watch_ids=None):
         now = observed_at if observed_at is not None else self.now()
         index = {}
@@ -146,6 +162,7 @@ class WatchManager:
         with self._lock:
             if self.closed:
                 return []
+            self.tick()
             for watch in self._watches.values():
                 if watch_ids is not None and watch.watch_id not in watch_ids:
                     continue
@@ -161,7 +178,10 @@ class WatchManager:
                     continue
                 vehicle = rows[0]
                 try:
-                    assessment = watch.validator.evaluate(vehicle, now)
+                    previous = watch.monitor.state
+                    assessment, event = watch.continuity.observe(
+                        vehicle, self.monotonic(), now, self.config, self.timing,
+                        watch.monitor, watch.validator, watch.vehicle_id)
                     watch.last_observation = deepcopy(vehicle)
                     watch.last_assessment = assessment
                     if vehicle.gps_timestamp != watch.diagnostic_timestamp:
@@ -184,9 +204,6 @@ class WatchManager:
                     if assessment.status != ObservationStatus.NEW:
                         logger.debug('watch observation ignored watch_id=%s reason=%s', watch.watch_id, assessment.status.value)
                         continue
-                    previous = watch.monitor.state
-                    event = observe_resolved_vehicle(watch.monitor, vehicle, watch.vehicle_id)
-                    watch.validator.last_processed_gps_timestamp = vehicle.gps_timestamp
                     watch.mobile_number, watch.plate = vehicle.mobile_number, vehicle.plate
                     if previous != watch.monitor.state:
                         logger.info('Watch watch_id=%s VEHID=%s previous=%s estado=%s sites=%s.', watch.watch_id, watch.vehicle_id, previous.value, watch.monitor.state.value, watch.monitor.actual_sites)
@@ -195,7 +212,7 @@ class WatchManager:
                         watch.status = WatchStatus.COMPLETED
                         watch.notification_status = 'attempting'
                         deliveries.append(deepcopy(watch))
-                        logger.info('Llegada detectada; Watch completada watch_id=%s.', watch.watch_id)
+                        logger.info('Evento %s; Watch completada watch_id=%s.', event.event_type, watch.watch_id)
                 except Exception:
                     watch.status, watch.failure_code = WatchStatus.FAILED, 'observation'
                     logger.error('Observación fallida watch_id=%s; otras vigilancias continúan.', watch.watch_id)

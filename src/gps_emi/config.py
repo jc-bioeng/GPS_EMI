@@ -9,9 +9,10 @@ class WatchConfig:
     initial_backoff: float = 5.0
     max_backoff: float = 30.0
     stale_warning_seconds: float = 300.0
+    inactivity_seconds: float = 43200.0
 
     def __post_init__(self):
-        for name in ("polling_interval", "initial_backoff", "max_backoff"):
+        for name in ("polling_interval", "initial_backoff", "max_backoff", "inactivity_seconds"):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} debe ser finito y mayor que cero.")

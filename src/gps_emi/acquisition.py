@@ -156,9 +156,24 @@ class Coordinator:
         self.thread = None
         self.state = "INITIALIZING"
         self.last_error = None
+        self._pause_start = None
+        self._attempt_pending = False
+        self._pauses = []
         self.metrics = dict(requests=0, successes=0, errors=0, rejected=0, duration=0.0)
         if lease is not None:
             self.next_start += lease.remaining(self.utcnow())
+
+    def watch_timing(self, origin):
+        """Effective inactivity since origin, excluding failed acquisition intervals.
+
+        No provider health inference. Pending HTTP defers expiry until its result
+        establishes whether that attempt belongs to a pause.
+        """
+        with self.condition:
+            now = self.monotonic()
+            intervals = self._pauses + ([(self._pause_start, now)] if self._pause_start is not None else [])
+            paused = sum(max(0, end - max(start, origin)) for start, end in intervals)
+            return max(0, now - origin - paused), self._attempt_pending
 
     def peek(self):
         with self.condition:
@@ -233,6 +248,7 @@ class Coordinator:
                     or not (self.pending or self.demands or probe_demand)):
                 return False
             self.inflight = True
+            self._attempt_pending = True
             self.next_start = now + self.config.interval
             if self.lease is not None:
                 try:
@@ -301,7 +317,8 @@ class Coordinator:
                     error = ('persistence', None)
                 else:
                     self._snapshot = self._received
-                    self.published_at = finished
+                    self.published_at = self.monotonic()
+            self._attempt_pending = False
             if error is not None:
                 if self.catalog is not None:
                     self.catalog.interrupt()
@@ -310,6 +327,8 @@ class Coordinator:
                 self.last_error = error
                 self.blocked = error[0] in ("authorization", "authentication", "configuration", "functional", "service_unavailable")
                 self.state = "BLOCKED_METHOD" if self.blocked else "UNAVAILABLE"
+                if not self.blocked and self._pause_start is None:
+                    self._pause_start = now
                 self.backoff = min(self.config.max_backoff, max(self.config.interval, self.backoff*2))
                 self.next_start = max(self.next_start, finished+self.backoff)
                 if self.blocked:
@@ -319,6 +338,9 @@ class Coordinator:
             else:
                 if self.backoff:
                     logging.getLogger(__name__).info('Adquisición recuperada; reducción gradual de espera.')
+                if self._pause_start is not None:
+                    self._pauses.append((self._pause_start, self.published_at))
+                    self._pause_start = None
                 self.metrics["successes"] += 1
                 self.last_error = None
                 self.backoff = self.backoff/2 if self.backoff > self.config.interval else 0
@@ -449,13 +471,15 @@ class SnapshotSource:
                 gps_instant=row.gps_timestamp.astimezone(timezone.utc).isoformat() if row.gps_timestamp else None))
         return vehicles
 
-    def wait(self, timeout=120, *, after_version=None, stop_event=None):
+    def wait(self, timeout=120, *, after_version=None, stop_event=None, on_tick=None):
         future = self.coordinator.request(refresh=after_version is not None, after_version=after_version)
         end = self.coordinator.monotonic()+timeout
         try:
             while True:
                 if stop_event is not None and stop_event.is_set():
                     raise KeyboardInterrupt()
+                if on_tick is not None:
+                    on_tick()
                 remaining = end-self.coordinator.monotonic()
                 if remaining <= 0:
                     raise SnapshotUnavailable()

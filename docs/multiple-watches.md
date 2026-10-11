@@ -30,10 +30,12 @@ Webhook firmado → Inbox → MessageService → solicitudes de alta
 `monitoring.watches.Watch` contiene UUID `watch_id`, `owner_id`, `vehicle_id`
 (VEHID estable), móvil, placa, `created_at`, `notification_target`, monitor,
 validador, última observación/evaluación, evento y resultado de notificación.
-Propietario y destino son campos separados. No se modifica Vehicle ni ArrivalEvent.
+Propietario y destino son campos separados. PresenceEvent especializa ArrivalEvent
+con tipo PRESENCE_CONFIRMED; Vehicle conserva su contrato.
 Las identidades visibles pueden actualizarse sin cambiar el VEHID seguido.
 
-Estados: ACTIVE recibe observaciones; COMPLETED detectó llegada; CANCELLED fue
+Estados: ACTIVE recibe observaciones; COMPLETED detectó llegada o confirmó presencia;
+EXPIRED terminó por inactivity sin notificación proactiva; CANCELLED fue
 detenida; FAILED identifica un error terminal de adquisición o un fallo local
 inesperado de observación. FAILED es necesario para no presentar un error como
 llegada o cancelación del usuario. No hay reactivación automática de terminales.
@@ -73,9 +75,13 @@ No se implementan login, renovación ni bypass de Turnstile.
 La ausencia o duplicidad de un VEHID omite solo esa observación y conserva la Watch.
 No se interpreta como salida ni se penaliza a otras Watches con backoff por vehículo.
 El validador existente rechaza timestamps duplicados, fuera de orden, ausentes o
-incompatibles en zona horaria de forma independiente. STALE permanece diagnóstico
-transitoriamente hasta fase 5, donde está aprobado impedir llegadas con datos
-antiguos. GPSFix=0 mantiene su política diagnóstica independiente. Zones y ArrivalMonitor
+incompatibles en zona horaria de forma independiente. Fase 5 bloquea el uso de
+GPS de más de 300 segundos para movimiento, llegada o actividad. GPSFix=0 conserva
+su política diagnóstica independiente. Continuity comparte interrupción, recuperación
+y vencimiento entre WatchManager y WatchRunner; no hay otra fuente ni monitor de negocio.
+FleetPolling despierta cada 0,2 segundos mientras hay vigilancias; SnapshotSource.wait
+permite avanzar el reloj de CLI en su espera existente. Estos ticks no adquieren GPS.
+La política completa y los límites temporales están en [fase 5](widetech-official-phase5.md). Zones y ArrivalMonitor
 mantienen sus reglas exactas: primera lectura dentro no es llegada, y pasar de
 sede a sede sin observar exterior tampoco lo es.
 
@@ -118,8 +124,11 @@ Un fallo de envío no evita que se intente notificar las otras llegadas del snap
 Las notificaciones son secuenciales: un envío lento puede retrasar otros envíos
 y el siguiente ciclo, sin bloquear el webhook.
 
-El modo template conserva la plantilla aprobada y su esquema de parámetros;
-este incremento no cambia su texto en Meta. El modo text añade «La vigilancia
+Para llegadas, el modo template conserva la plantilla aprobada y su esquema de
+parámetros. La presencia confirmada usa texto específico mediante Messenger.reply,
+respetando la ventana de atención incluso si llegada usa template. Fuera de ventana
+queda failed/service_window_closed: no se envía una plantilla de llegada engañosa,
+ni se crea/aprueba una plantilla en Meta desde este encargo. El modo text añade «La vigilancia
 ha finalizado» y conserva «última posición reportada». No se envía un segundo
 texto libre fuera de la ventana de atención para complementar una plantilla.
 
@@ -192,9 +201,9 @@ La exclusión local impide otra autoridad cooperante con el mismo directorio de
 estado; no coordina instalaciones o hosts distintos.
 La cola de altas pendientes y el historial consumen memoria durante la sesión.
 La no restauración de vigilancias es una decisión aprobada (VIG-08/APL-02),
-no un requisito olvidado. Continuidad y recuperación de fase 5 están aprobadas
-pero no implementadas aquí. Reintentos durables y seguimiento de entrega no
-se incorporan en este cierre. Las altas pendientes tienen límite y TTL; el
+no un requisito olvidado. Continuidad y recuperación están implementadas localmente
+en [fase 5](widetech-official-phase5.md). Reintentos durables y seguimiento de entrega
+no se incorporan. Las altas pendientes tienen límite y TTL; el
 historial de vigilancias permanece en memoria.
 El usuario reportó arranque CLI con STALE el 9 de octubre; eso no demuestra
 llegada ni entrega WhatsApp. La prueba manual anterior es una guía histórica,

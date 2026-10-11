@@ -1,17 +1,18 @@
 """Orquestación de una vigilancia; nunca convierte fallos en observaciones."""
 import logging
-from threading import Event
+from threading import Event, RLock
 from typing import Protocol
 
 from gps_emi.config import WatchConfig
-from gps_emi.acquisition import SnapshotSource
+from gps_emi.acquisition import SnapshotSource, SnapshotUnavailable
 from gps_emi.catalog import MEDELLIN_FLEETS
 from gps_emi.clock import operational_now
 from gps_emi.errors import AcquisitionError
 from gps_emi.models import Vehicle
 from gps_emi.monitoring.arrival import ArrivalMonitor, DESTINATIONS
+from gps_emi.monitoring.continuity import Continuity
 from gps_emi.monitoring.observation import (
-    ObservationValidator, ObservationStatus, observe_resolved_vehicle, gps_fix_warning,
+    ObservationValidator, ObservationStatus, gps_fix_warning,
 )
 from gps_emi.notifications.base import NotificationService
 from gps_emi.resolution import (
@@ -28,6 +29,10 @@ class VehicleSource(Protocol):
 
 def local_now():
     return operational_now()
+
+
+class _WatchEnded(Exception):
+    pass
 
 
 class WatchRunner:
@@ -55,12 +60,36 @@ class WatchRunner:
         self._diagnostics: set[str] = set()
         self._result: int | None = None
         self._fleet_changed = Event()
+        self._lock = RLock()
+        self.continuity = None
+        self._completed = False
 
     def _published(self, snapshot):
-        if snapshot is not None and self.vehid is not None and any(
-                item.vehicle_id == self.vehid and item.fleet_name and item.fleet_name not in MEDELLIN_FLEETS
-                for item in snapshot.identities):
-            self._fleet_changed.set()
+        with self._lock:
+            if self._completed or self.failure_code is not None:
+                return
+            if snapshot is not None and self.vehid is not None and any(
+                    item.vehicle_id == self.vehid and item.fleet_name and item.fleet_name not in MEDELLIN_FLEETS
+                    for item in snapshot.identities):
+                self._fleet_changed.set()
+
+    def _tick(self):
+        with self._lock:
+            if self._completed:
+                return
+            if self.stop_event is not None and self.stop_event.is_set():
+                raise KeyboardInterrupt()
+            coordinator = self.client.coordinator
+            if self._fleet_changed.is_set():
+                self.failure_code = 'fleet_changed'
+            elif coordinator.blocked or coordinator.closed:
+                self.failure_code = 'acquisition'
+            elif self.continuity is not None and self.continuity.tick(
+                    coordinator.monotonic(), self.config, coordinator.watch_timing):
+                self.failure_code = 'inactivity'
+            if self.failure_code is not None:
+                logger.info('Vigilancia terminada: reason=%s.', self.failure_code)
+                raise _WatchEnded()
 
     def _warn_once(self, code, message, *args):
         if code not in self._diagnostics:
@@ -68,7 +97,26 @@ class WatchRunner:
             self._diagnostics.add(code)
 
     def _process(self, vehicle):
-        assessment = self.validator.evaluate(vehicle, self.now())
+        with self._lock:
+            if self._completed:
+                return True
+            self._tick()
+            event = self._observe(vehicle)
+            if event is None:
+                return False
+            self._completed = True  # Reserve the only attempt before releasing lock.
+        self.notifier.send_arrival(event)
+        logger.info("Vigilancia completada.")
+        return True
+
+    def _observe(self, vehicle):
+        coordinator = self.client.coordinator
+        if self.continuity is None:
+            self.continuity = Continuity(coordinator.monotonic())
+        previous_state = self.monitor.state
+        assessment, event = self.continuity.observe(
+            vehicle, coordinator.monotonic(), self.now(), self.config, coordinator.watch_timing,
+            self.monitor, self.validator, self.vehid)
         timestamp = vehicle.gps_timestamp
         if timestamp != self._diagnostic_timestamp:
             self._diagnostic_timestamp = timestamp
@@ -82,15 +130,14 @@ class WatchRunner:
             self._warn_once("GPSFix", "GPSFix=0: dato diagnóstico; no se descarta la observación.")
         if assessment.status == ObservationStatus.DUPLICATE:
             logger.debug("DUPLICATE: sin reporte GPS nuevo para VEHID=%s.", self.vehid)
-            return False
+            return None
         if assessment.status != ObservationStatus.NEW:
             self._warn_once(assessment.status.value,
                             "%s: observación no procesada (VEHID=%s, GPS=%s).",
                             assessment.status.value, self.vehid, timestamp)
-            return False
-        previous_state = self.monitor.state
-        event = observe_resolved_vehicle(self.monitor, vehicle, expected_vehid=self.vehid)
-        self.validator.last_processed_gps_timestamp = timestamp
+            return None
+        if assessment.is_stale(300):
+            return None
         if self.destination is None:
             membership = "INSIDE_EMI" if self.monitor.actual_sites else "OUTSIDE_EMI"
         else:
@@ -99,12 +146,10 @@ class WatchRunner:
         log("%s | última posición reportada: %s | report_age=%.0f s | GPSFix=%s",
                     membership, timestamp, age, vehicle.gps_fix)
         if event is None:
-            return False
-        logger.info("ARRIVAL_DETECTED: VEHID=%s, placa=%s, móvil=%s, destino=%s.",
-                    vehicle.vehid, vehicle.plate, vehicle.mobile_number, event.destination)
-        self.notifier.send_arrival(event)
-        logger.info("Vigilancia completada.")
-        return True
+            return None
+        logger.info("%s: VEHID=%s, placa=%s, móvil=%s, destino=%s.",
+                    event.event_type, vehicle.vehid, vehicle.plate, vehicle.mobile_number, event.destination)
+        return event
 
     def _run(self):
         logger.info("Vigilando %s → %s", self.identifier, self.destination or "EMI (Poblado o Taller)")
@@ -112,8 +157,9 @@ class WatchRunner:
         while True:
             if self.stop_event is not None and self.stop_event.is_set():
                 return 130
+            self._tick()
             try:
-                snapshot = self.client.wait(after_version=version, stop_event=self.stop_event)
+                snapshot = self.client.wait(after_version=version, stop_event=self.stop_event, on_tick=self._tick)
                 version = (snapshot.epoch, snapshot.version)
                 self._published(snapshot)
                 if self._fleet_changed.is_set():
@@ -121,6 +167,12 @@ class WatchRunner:
                     logger.info('Vigilancia terminada: reason=fleet_changed.')
                     return 1
                 vehicles = self.client.bind(snapshot).get_vehicles(include_retained=False, purpose='watch')
+            except SnapshotUnavailable:
+                self._tick()
+                if self.vehid is not None:
+                    continue
+                self.failure_code = 'acquisition'
+                return 1
             except AcquisitionError as error:
                 self.failure_code = 'fleet_changed' if self._fleet_changed.is_set() else "acquisition"
                 logger.error("%s Vigilancia detenida.", error.public_message)
@@ -145,6 +197,7 @@ class WatchRunner:
                     self.failure_code = 'fleet_changed'
                     return 1
                 self.monitor = ArrivalMonitor(vehicle.display_identifier, self.destination)
+                self.continuity = Continuity(self.client.coordinator.monotonic())
                 logger.info("Identificador resuelto: VEHID=%s, placa=%s, móvil=%s.",
                             vehicle.vehid, vehicle.plate, vehicle.mobile_number)
                 if self.on_resolved is not None:
@@ -168,6 +221,8 @@ class WatchRunner:
         self.client.coordinator.subscribers.append(self._published)
         try:
             self._result = self._run()
+        except _WatchEnded:
+            self._result = 1
         except (KeyboardInterrupt, EOFError):
             logger.info("Vigilancia cancelada.")
             self._result = 130

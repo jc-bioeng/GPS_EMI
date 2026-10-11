@@ -1,8 +1,8 @@
 # Documentación de GPS_EMI
 
-Revisión: **9 de octubre de 2026**. Base histórica: `03ee209`;
+Revisión: **11 de octubre de 2026**. Base histórica: `03ee209`;
 fase 1 versionada en `eda2606`, fase 2 en `24dae94`, fase 3 en `a171b37`.
-Fase 4 implementada localmente, sin commit ni despliegue en este encargo.
+Fase 4 versionada en `18d2661`. Fase 5 implementada localmente; sin commit ni despliegue en este encargo.
 
 ## Lectura recomendada
 
@@ -20,6 +20,7 @@ Para RenderExcel, leer primero las [decisiones arquitectónicas aprobadas](decis
 | Captura pasiva y datos | [Collector](gps-collector.md) |
 | Campañas temporales y SQLite | [Sesiones de recolección](collection-sessions.md) |
 | Adquisición central implementada, fase 2 | [Especificación de fase 2](widetech-official-phase2-spec.md) |
+| Continuidad de vigilancias, fase 5 | [Política y pruebas](widetech-official-phase5.md) |
 | Collector nacional y campañas, fase 4 | [Diseño y pruebas](widetech-official-phase4.md) |
 | Catálogo y consultas nacionales, fase 3 | [Implementación y pruebas](widetech-official-phase3.md) |
 | Adaptador oficial aislado, fase 1 | [Implementación y pruebas](widetech-official-phase1.md) |
@@ -47,12 +48,17 @@ operacional de tres adquisiciones aptas consecutivas; no certifica cobertura.
 En su cierre, collector y admisión de vigilancias conservaban Medellín. Véase su especificación
 para consistencia SQLite y evidencia offline.
 
-**Fase 4 local:** collector nacional, deduplicación GPS persistente, asociaciones
+**Fase 4 versionada:** collector nacional, deduplicación GPS persistente, asociaciones
 entre campañas, históricos fuera de orden, admisión durable y registro de ventanas
 de interrupción. Vigilancias siguen en Medellín. SQLite v3 y CSV aditivos.
 
-**Pendiente de implementación por fases:** continuidad de vigilancias (fase 5)
-y validación/despliegue gradual (fase 6).
+**Fase 5 local:** bloqueo de llegadas con GPS de más de 300 segundos, interrupción
+individual, presencia confirmada tras tres GPS nuevos y frescos en la misma sede,
+y vencimiento de doce horas configurables descontando pausas de adquisición.
+CLI y WhatsApp comparten la lógica temporal. No se restauran vigilancias.
+
+**Pendiente de implementación por fases:** retención técnica y
+validación/despliegue gradual (fase 6).
 Identidad, geocercas, zona inicial, cobertura y coordinación ya tienen decisiones
 aprobadas en el registro de referencia. La restauración de vigilancias está
 aplazada; los detalles técnicos restantes no reabren esos acuerdos. Un plan no
@@ -66,6 +72,7 @@ acredita que el comportamiento ya esté implementado ni desplegado.
 | Base más adaptador oficial aislado, cierre de fase 1 | 892 tests aprobados (187 del adaptador), registrados el 8 de octubre en fase 1 |
 | Fase 2, ejecuciones anteriores registradas | 919 tests; después del cierre de hallazgos, 41 específicos y 933 de regresión |
 | Cierre documental y commit de fase 2 | Véase el apartado de reconciliación del documento de fase 2 para la ejecución de este encargo |
+| Fase 5 local | Véase [evidencia de fase 5](widetech-official-phase5.md); sin validación externa |
 | Fase 4 local | Véase evidencia específica y regresión en fase 4; sin validación externa |
 | Fase 3, ejecución local previa | Véase la evidencia de fase 3; bases temporales, sin validar WideTech |
 | Pruebas manuales de fase 2 reportadas por el usuario, 9 de octubre | CLI por móvil/placa, por sede y arranque de vigilancia con STALE; no acreditan llegada, WhatsApp, cobertura nacional ni Docker/Ubuntu |

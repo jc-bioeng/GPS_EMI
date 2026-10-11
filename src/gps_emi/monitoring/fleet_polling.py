@@ -28,6 +28,9 @@ class FleetPolling:
         self.source = source_factory()
         self.coordinator = self.source.coordinator
         self.manager, self.config = manager, config or WatchConfig()
+        # Shared clock is installed before any watch is admitted.
+        self.manager.monotonic = self.coordinator.monotonic
+        self.manager.timing = self.coordinator.watch_timing
         self.on_created, self.on_error = on_created, on_error
         self.on_terminal, self.on_selection = on_terminal, on_selection
         self.collector = collector
@@ -39,6 +42,7 @@ class FleetPolling:
         self.closed = False
         self.last_version = None
         self.terminal_reported = False
+        self.terminal_failures = []
         self.request_valid = lambda request: True
         self.owner_generations = {}
         self.coordinator.probes.append(lambda: self.active)
@@ -58,6 +62,10 @@ class FleetPolling:
             if self.closed:
                 return
             if snapshot is None:
+                if self.coordinator.blocked:
+                    # Serialize terminal failure against any queued observation;
+                    # channel callbacks still run in the consumer, not HTTP.
+                    self.terminal_failures.extend(self.manager.fail_active('acquisition'))
                 self.condition.notify_all()
                 return
             self.manager.reconcile_identities(snapshot.identities)
@@ -124,12 +132,14 @@ class FleetPolling:
                 if self.coordinator.blocked and not self.terminal_reported:
                     self.terminal_reported = True
                     requests, self.pending = self.pending, []
-                    failed = self.manager.fail_active('acquisition')
+                    failed = self.terminal_failures + self.manager.fail_active('acquisition')
+                    self.terminal_failures = []
                     for request in requests:
                         self._callback(self.on_error, request, 'acquisition')
                     for watch in failed:
                         self._callback(self.on_terminal, watch)
                     return
+                self.manager.tick()
                 if not self.pending and not self.snapshots and not self.manager.has_active():
                     return
                 now = self.coordinator.monotonic()
@@ -197,7 +207,7 @@ class FleetPolling:
                     # This timeout expires pending registrations; never acquires.
                     if (not self.snapshots and not self.closed and
                             not (self.coordinator.blocked and not self.terminal_reported)):
-                        self.condition.wait(timeout=0.2 if self.pending else None)
+                        self.condition.wait(timeout=0.2 if self.pending or self.manager.has_active() else None)
         except Exception:
             logger.error('Distribución detenida por fallo interno; sin detalles sensibles.')
             with self.condition:

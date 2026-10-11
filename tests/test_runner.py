@@ -97,13 +97,12 @@ def test_session_expired_terminates_without_retry(caplog):
     assert runner.client.coordinator.blocked
 
 
-def test_stale_and_gpsfix_zero_do_not_discard_new_observation(caplog):
+def test_stale_blocks_arrival_independently_of_gpsfix(caplog):
     runner = make_runner([report(-120, gps_fix=0), report(-60, True, gps_fix='0')])
-    assert runner.run() == 0
-    runner.notifier.send_arrival.assert_called_once()
+    assert runner.run() == 1
+    runner.notifier.send_arrival.assert_not_called()
     assert any(record.levelno == logging.WARNING and 'STALE' in record.message for record in caplog.records)
     assert 'GPSFix=0' in caplog.text
-    assert 'report_age=360 s' in caplog.text
 
 
 @pytest.mark.parametrize('age,expected', [(300, False), (301, True)])
@@ -111,7 +110,7 @@ def test_stale_threshold_is_strict(age, expected, caplog):
     runner = make_runner([report(300 - age)])
     runner.run()
     assert ('STALE' in caplog.text) == expected
-    assert runner.monitor.state == MonitorState.OUTSIDE
+    assert runner.monitor.state == (MonitorState.INITIAL if expected else MonitorState.OUTSIDE)
 
 
 def test_configurable_stale_warning(caplog):

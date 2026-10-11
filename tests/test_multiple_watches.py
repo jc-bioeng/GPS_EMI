@@ -27,7 +27,7 @@ def vehicle(vid='1', seconds=0, sites=(), **kwargs):
 def setup_fleet(rows, config=None):
     notify, source = Mock(return_value=True), Mock()
     source.get_vehicles.side_effect = rows
-    manager = WatchManager(notify, config, now=lambda: BASE + timedelta(minutes=10))
+    manager = WatchManager(notify, config, now=lambda: BASE + timedelta(minutes=5))
     created, errors = Mock(), Mock()
     polling = FleetPolling(lambda: ScriptedSnapshots(source), manager, config=config, autostart=False,
                            on_created=created, on_error=errors)
@@ -126,12 +126,12 @@ def test_absent_or_ambiguous_vehicle_keeps_watch(missing):
     notify.assert_called_once()
 
 
-def test_stale_and_gps_fix_zero_still_process():
+def test_fresh_gps_fix_zero_still_process():
     manager, polling, _, notify, _, _ = setup_fleet([[vehicle(gps_fix=0)], [vehicle(seconds=1,sites=EMI_SITES,gps_fix=0)]])
     polling.request_watch('A','AMB-1','target')
     publish(polling); publish(polling)
     watch = manager.list_watches('A')[0]
-    assert watch.last_assessment.is_stale(300)
+    assert not watch.last_assessment.is_stale(300)
     assert watch.last_observation.gps_fix == 0
     notify.assert_called_once()
 

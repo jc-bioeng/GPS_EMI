@@ -39,7 +39,7 @@ def test_cli_passes_config_without_reading_env(monkeypatch):
                      '--stale-warning-seconds', '120', '--log-level', 'DEBUG']) == 0
     assert watch.call_args.args[3] == 17
     assert watch.call_args.kwargs == {
-        'initial_backoff': 2, 'max_backoff': 8, 'stale_warning_seconds': 120,
+        'initial_backoff': 2, 'max_backoff': 8, 'stale_warning_seconds': 120, 'inactivity_seconds': 43200,
     }
 
 

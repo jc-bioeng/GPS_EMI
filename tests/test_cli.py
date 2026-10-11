@@ -22,7 +22,7 @@ def test_watch_notifies_once_and_finishes(caplog):
     client = Mock()
     client.get_vehicles.side_effect = [[vehicle()], [vehicle()], [vehicle(True)]]
     sleep = Mock()
-    assert cli.watch(ScriptedSnapshots(client), 'AMB-106', DESTINATIONS[1], 7, ConsoleNotifier(), sleep) == 0
+    assert cli.watch(ScriptedSnapshots(client), 'AMB-106', DESTINATIONS[1], 7, ConsoleNotifier(), sleep, now=lambda: vehicle().gps_timestamp + timedelta(seconds=60)) == 0
     assert caplog.text.count('ARRIVAL_DETECTED') == 1
     assert 'Vigilancia completada.' in caplog.text
     assert 'GPSFix=0' in caplog.text

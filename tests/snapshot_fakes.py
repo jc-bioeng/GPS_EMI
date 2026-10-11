@@ -21,13 +21,17 @@ class ScriptedSnapshots(SnapshotSource):
     def advance(self):
         self.time = max(self.time, self.coordinator.next_start)
         self.coordinator.tick()
+        if self.coordinator.last_error == ("internal", None):
+            raise RuntimeError("Synthetic acquisition script failed or exhausted")
 
-    def wait(self, timeout=120, *, after_version=None, stop_event=None):
+    def wait(self, timeout=120, *, after_version=None, stop_event=None, on_tick=None):
         pending = self.coordinator.request(refresh=after_version is not None, after_version=after_version)
         for _ in range(32):
             if stop_event is not None and stop_event.is_set():
                 pending.cancel()
                 raise KeyboardInterrupt()
+            if on_tick is not None:
+                on_tick()
             if pending.done():
                 return pending.result()
             self.advance()
@@ -59,6 +63,7 @@ def snapshot_reader(source):
     source.coordinator = Mock(closed=False, blocked=False,
                               config=AcquisitionConfig(), probes=[], subscribers=[])
     source.coordinator.monotonic.return_value = 0
+    source.coordinator.watch_timing.return_value = (0, False)
     source.coordinator.peek.side_effect = published
     source.coordinator.request.side_effect = request
     source.bind = Mock(return_value=source)

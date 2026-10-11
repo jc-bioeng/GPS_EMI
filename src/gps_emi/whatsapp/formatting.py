@@ -196,6 +196,11 @@ def format_started(vehicle):
 
 
 def format_arrival(event):
+    if event.event_type == 'PRESENCE_CONFIRMED':
+        return ("🚑 Presencia confirmada tras interrupción\n\n" + identity(event.vehicle)
+                + f"\n{event.destination}\nHora del reporte GPS: {display(event.vehicle.gps_timestamp)}"
+                + "\nNo se conoce la hora de llegada. La vigilancia ha finalizado."
+                + "\nBasado en posiciones reportadas; no garantiza ubicación física actual.")
     site = event.site or ("Sedes reportadas simultáneamente (sin sede única): " + " / ".join(event.sites))
     return ("🚑 Llegada de ambulancia detectada\n\n" + identity(event.vehicle)
             + f"\n{site}\nHora GPS: {display(event.vehicle.gps_timestamp)}"

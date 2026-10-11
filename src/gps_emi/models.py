@@ -50,3 +50,8 @@ class ArrivalEvent:
     def site(self) -> str | None:
         """Sede única; si se reportan ambas, no se elige arbitrariamente."""
         return self.sites[0] if len(self.sites) == 1 else None
+
+
+@dataclass(frozen=True)
+class PresenceEvent(ArrivalEvent):
+    event_type: str = field(default="PRESENCE_CONFIRMED", init=False)

@@ -32,8 +32,8 @@ def positive_interval(value):
 
 def watch(client, identifier: str, destination: str | None, interval: float,
           notifier: NotificationService, sleep=None, *, now=None,
-          initial_backoff=5.0, max_backoff=30.0, stale_warning_seconds=300.0) -> int:
-    config = WatchConfig(interval, initial_backoff, max_backoff, stale_warning_seconds)
+          initial_backoff=5.0, max_backoff=30.0, stale_warning_seconds=300.0, inactivity_seconds=43200.0) -> int:
+    config = WatchConfig(interval, initial_backoff, max_backoff, stale_warning_seconds, inactivity_seconds)
     return watch_arrival(client, identifier, notifier, config,
                          destination=destination, sleep=sleep, now=now)
 
@@ -72,7 +72,7 @@ def _execute(action, args, config) -> int:
                            "Omítalo para vigilar la llegada a cualquiera de las sedes EMI.")
         return watch(client, identifier, args.destination, config.polling_interval, ConsoleNotifier(),
                      initial_backoff=config.initial_backoff, max_backoff=config.max_backoff,
-                     stale_warning_seconds=config.stale_warning_seconds)
+                     stale_warning_seconds=config.stale_warning_seconds, inactivity_seconds=config.inactivity_seconds)
     if action == "location":
         client = client.bind(client.wait())
         print(format_location(get_vehicle_location(client, identifier, config)))
@@ -102,6 +102,8 @@ def main(argv=None) -> int:
     parser.add_argument("--stale-warning-seconds", type=float, default=300.0,
                         help="Advertir STALE si report_age supera este umbral (300)")
     parser.add_argument("--log-level", choices=("DEBUG", "INFO", "WARNING", "ERROR"), default=None)
+    parser.add_argument("--watch-inactivity-seconds", type=float, default=43200,
+                        help="Vencimiento por inactividad individual, segundos (43200)")
     args = parser.parse_args(argv)
     action = args.action or ("site" if args.site is not None else "watch")
     if args.destination is not None and action != "watch":
@@ -111,7 +113,7 @@ def main(argv=None) -> int:
     if args.identifier is not None and action == "site":
         parser.error("El inventario por sede no requiere --identifier.")
     try:
-        config = WatchConfig(args.interval, args.initial_backoff, args.max_backoff, args.stale_warning_seconds)
+        config = WatchConfig(args.interval, args.initial_backoff, args.max_backoff, args.stale_warning_seconds, args.watch_inactivity_seconds)
     except ValueError as error:
         parser.error(str(error))
     configure_logging(args.log_level)

@@ -18,9 +18,9 @@ class WhatsAppNotifier:
         if self.last_event is not None:
             return
         self.last_event = event
-        logger.info("Llegada detectada; preparando notificación WhatsApp.")
+        logger.info("Evento %s; preparando notificación WhatsApp.", event.event_type)
         try:
-            if self.config.arrival_mode == "text":
+            if event.event_type == "PRESENCE_CONFIRMED" or self.config.arrival_mode == "text":
                 self.messenger.reply(self.recipient, format_arrival(event))
             elif event.site is None:
                 # No introducir una sede elegida arbitrariamente en la plantilla.

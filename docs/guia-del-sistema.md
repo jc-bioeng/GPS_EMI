@@ -1,8 +1,8 @@
 # Guía del sistema
 
-Estado revisado el 9 de octubre de 2026: base histórica `03ee209`, fase 1
-versionada en `eda2606`, fase 2 versionada en `24dae94` y fase 3 en `a171b37`. Fase 4 local añade collector nacional y campañas
-sin duplicación GPS; no está desplegada.
+Estado revisado el 11 de octubre de 2026: base histórica `03ee209`, fase 1
+versionada en `eda2606`, fase 2 versionada en `24dae94` y fase 3 en `a171b37`. Fase 4 (`18d2661`) añade collector nacional y campañas
+sin duplicación GPS. Fase 5 local incorpora continuidad de vigilancias; sin despliegue.
 Ver [índice y estado](README.md) y [manual de operación](operacion.md).
 
 ## Propósito y componentes
@@ -121,13 +121,23 @@ entre sedes sin observar exterior no equivale a esa transición; una pertenencia
 ambigua a ambas sedes no fuerza una sede ganadora.
 
 Timestamps duplicados, fuera de orden, ausentes o incompatibles se rechazan para
-la evolución del monitor. STALE sigue siendo diagnóstico en el comportamiento
-transitorio de fase 2; impedir llegadas con datos antiguos está aprobado para
-fase 5 (VIG-10). GPSFix=0 mantiene su política diagnóstica independiente.
+la evolución del monitor. GPS de más de 300 segundos no avanza el monitor,
+no genera llegadas ni reinicia actividad (VIG-10). El umbral configurable de
+advertencia no modifica esa barrera. GPSFix=0 sigue siendo diagnóstico independiente.
+
+Tras 300 segundos sin GPS nuevo y fresco se entra en interrupción individual.
+Tres GPS nuevos y frescos en la misma sede confirman presencia y finalizan con
+un aviso distinto de llegada: su hora exacta se desconoce. Exterior fresco vuelve
+al seguimiento normal; cambio de sede u otra interrupción reinicia la secuencia.
+El vencimiento ocurre al superar doce horas configurables sin actividad, descontando
+solo pausas de adquisición desde intento fallido hasta publicación válida, incluidos
+fallos locales de persistencia con categoría propia. Repetir GPS no pausa ni renueva.
+La adquisición recuperada no confirma presencia individual. Véase [fase 5](widetech-official-phase5.md).
 Ausencia o duplicidad de identidad no constituye salida.
 
 Las vigilancias son únicas por propietario + VEHID mientras están ACTIVE. Sus
-estados terminales son COMPLETED, CANCELLED y FAILED. El gestor protege estado
+estados terminales son COMPLETED (llegada o presencia), CANCELLED, FAILED y
+EXPIRED (causa interna inactivity, sin aviso proactivo nuevo). El gestor protege estado
 con locks y ejecuta notificaciones fuera del lock. Al detectar llegada reserva
 un intento de envío: aceptación por Meta no confirma entrega y no hay reintento
 durable automático. Las vigilancias y conversaciones se pierden al reiniciar.
