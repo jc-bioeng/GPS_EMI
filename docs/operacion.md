@@ -1,6 +1,6 @@
 # Manual de operación
 
-Revisión del 9 de octubre de 2026, reconciliada con fase 3 local. Estos comandos son instrucciones para el
+Revisión del 9 de octubre de 2026, reconciliada con fase 4 local. Estos comandos son instrucciones para el
 operador; documentarlos no implica ejecutarlos ni certificar un despliegue.
 Consultar [arquitectura](guia-del-sistema.md) y [estado de implementación](README.md).
 
@@ -26,7 +26,7 @@ de sesiones no carga `.env` ni consulta GPSpace.
 | `WHATSAPP_API_VERSION` | Versión de API configurada |
 | `WHATSAPP_ARRIVAL_MODE`, `WHATSAPP_ARRIVAL_TEMPLATE`, `WHATSAPP_TEMPLATE_LANGUAGE` | Modalidad y plantilla de llegada |
 | `GPS_EMI_DATA_DB` | SQLite compartido por catálogo oficial/campañas; por defecto `data/gps_observations.db` |
-| `GPS_EMI_COLLECTION_HEARTBEAT_SECONDS` | Persistencia periódica de datos idénticos; 300 s por defecto |
+| `GPS_EMI_COLLECTION_HEARTBEAT_SECONDS` | Compatibilidad heredada; no duplica reportes GPS en fase 4 |
 | `LOG_LEVEL`, `GPS_EMI_LOG_SUMMARY_SECONDS` | Nivel y frecuencia de resúmenes; INFO y 300 s por defecto |
 
 Los nombres no son credenciales. No copiar valores de sesión a documentación,
@@ -60,7 +60,7 @@ y no presenta posiciones de SQLite como actuales. Consultas con caché muestran
 su antigüedad. CLI y servidor requieren ejecución exclusiva en esa instalación:
 ambos deben usar el mismo GPS_EMI_STATE_DIR, independiente del cwd. No hay IPC
 ni coordinación con otras instalaciones/hosts. En modo oficial, las consultas
-son nacionales de ambulancias; vigilancias y collector siguen en Medellín.
+y el collector son nacionales de ambulancias; vigilancias siguen en Medellín.
 Desaparición confirmada no equivale a baja o reclasificación; no introduce un
 filtro nuevo de candidatos. La reclasificación confirmada termina internamente
 la vigilancia sin notificación proactiva. No se restauran vigilancias ni posiciones.
@@ -96,9 +96,20 @@ la sesión activa. `--db RUTA`, antes del subcomando, sustituye la variable.
 Solo hay una campaña activa por base. `status` puede crear/migrar el esquema y
 reconocer expiraciones; el exportador abre la base en lectura y exige destino
 nuevo. Los filtros `--from` inclusivo y `--to` exclusivo requieren fecha ISO con
-offset y se aplican a la adquisición, no al timestamp GPS.
+offset y se aplican a la primera recepción en esa campaña (session_received_at),
+no al timestamp GPS. La exportación global sigue filtrando acquired_at.
 
-Reiniciar conserva el plazo original y no recupera muestras perdidas. La sesión
+Fase 4 migra SQLite de forma aditiva a user_version=3. Los binarios anteriores
+pueden rechazar ese esquema: no basta con revertir la imagen. Respaldar antes de
+migrar mediante la API backup de SQLite o escritores detenidos; comprobar el
+respaldo con su binario compatible. Para revertir, detener escritores, preservar
+la base v3 y restaurar una copia previa verificada con el binario anterior. Los
+datos posteriores permanecen en la copia v3 para revisión; no reducir user_version
+ni borrar columnas para forzar compatibilidad. Este encargo solo usó bases temporales.
+
+Reiniciar conserva el plazo original y registra una ventana de interrupción;
+no recupera muestras perdidas. Una escritura admitida antes del cierre termina
+sin prolongar la campaña; un lote solo encolado se revalida al iniciar escritura. La sesión
 COLLECTING no garantiza que el proveedor esté respondiendo: revisar logs y
 conteos. Ver [sesiones](collection-sessions.md) para ejemplos Docker y exportación
 de datos históricos sin sesión.

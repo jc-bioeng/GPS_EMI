@@ -1,180 +1,115 @@
-# Captura GPS pasiva
+# Captura GPS nacional mediante campañas
 
-El collector observa snapshots ya adquiridos por `FleetPolling` (el coordinador
-real del repositorio). No tiene cliente GPS, no consulta por su cuenta y no decide
-llegadas. WatchManager procesa primero el snapshot; después se entrega una copia
-de los vehículos a una cola limitada de 32 snapshots. Un thread independiente
-escribe SQLite. No se modifican ArrivalMonitor, geocercas ni la UX.
+Estado local de fase 4, 9 de octubre de 2026. Diseño y evidencia completos en
+[fase 4](widetech-official-phase4.md); autoridad: [decisiones](decisiones-arquitectonicas-renderexcel.md).
 
-## Alcance y campos
+AcquisitionRuntime → Coordinator → Snapshot sigue siendo la única adquisición.
+FleetPolling distribuye las publicaciones; no es el planificador HTTP. El collector
+no consulta WideTech, ni interpreta llegadas. Consultas, vigilancias y campañas
+comparten la misma adquisición. Leer caché no entrega otro lote al collector.
 
-La captura abarca la flota que ya devuelve el cliente: exclusivamente
-`Ambulancias Medellin;44986;0`. Incluye todos los vehículos de cada snapshot,
-con/sin zona, detenidos/en movimiento, ignición encendida/apagada, GPSFix cero,
-reportes antiguos, duplicados y campos ausentes. No guarda el payload completo.
+## Alcance y datos
 
-El parser ya extraía Latitude y Longitude; ahora Vehicle las conserva, junto
-con los identificadores originales y Zones original. No se agregan campos
-inventados. Correspondencia **observada en EMI/GPSpace**, no garantía universal:
+En modo oficial, se capturan filas utilizables recibidas en adquisiciones nuevas
+cuyo fltName normalizado empieza por Ambulancias, a nivel nacional. Vigilancias
+siguen exclusivamente en Medellín; no hay selección manual de flotas (APL-01).
+Una fila mala no bloquea las buenas; catalog.absence_eligible no decide captura.
+No se usan posiciones retenidas como nuevos reportes. Los reportes válidos fuera
+de orden sí se guardan históricamente, sin retroceder el estado operativo.
 
-| SQLite | Origen / significado |
+VEH_ID es identidad. Se conservan las columnas anteriores de Vehicle y se añaden:
+
+| Campo | Significado |
 |---|---|
-| id | Clave local autoincremental de observación |
-| acquired_at | Fin de adquisición por GPS_EMI; ISO 8601 UTC con offset |
-| vehicle_id | VEHID, identidad técnica principal |
-| mobile_number | VEH_LCNS con strip, número de móvil |
-| plate | VEH_NAM normalizado, placa |
-| vehicle_name_raw | VEH_NAM antes de normalizar |
-| vehicle_license_raw | VEH_LCNS antes de normalizar |
-| gps_reported_at | Fecha, interpretación actual del parser sin timezone añadido |
-| latitude / longitude | Latitude / Longitude que ya extrae el parser |
-| speed | Velocidad que ya normaliza Vehicle |
-| ignition / gps_fix | StateIgnition / GPSFix, escalares JSON para preservar tipo |
-| zones | Lista normalizada, JSON; lista vacía si no hay zonas |
-| zones_raw | Zones antes de eliminar markup o extraer nombres |
-| reported_location | Location, conservada sin limpiar markup |
-| fingerprint | SHA-256 de los campos anteriores salvo id/acquired_at |
+| fleet_name / fleet_raw | Flota normalizada / fltName original del reporte |
+| gps_original / server_original | FechaGPS / FechaServidor originales |
+| provider_record_id | Id del registro del proveedor, sin garantía de unicidad |
+| provenance | Método oficial de procedencia; NULL en legado sin esa información |
+| gps_instant | Instante GPS interpretado en UTC, separado del original |
+| historical | 1 si el instante es anterior al máximo almacenado del mismo proveedor/VEH_ID |
+| timestamp_collision | 1 si otro contenido GPS ya existe para ese instante e identidad |
 
-Valores opcionales ausentes se guardan como SQL NULL, salvo ignition/gps_fix,
-que usan JSON `null`, y zones, que usa JSON `[]`. Coordenadas sin afinidad SQLite
-preservan incluso un valor textual que el parser no pudiera convertir. El esquema
-es versión 2 (`PRAGMA user_version`), con índices por sesión/VEHID y acquired_at.
-La migración desde v1 agrega `collection_session_id` nullable sin borrar filas:
-los datos históricos quedan sin sesión, disponibles mediante el exportador antiguo.
-La tabla `collection_sessions` guarda id, started_at, planned_end_at, stopped_at,
-status, requested_duration_seconds, created_at y stop_reason. Un índice único
-permite una sola sesión COLLECTING. No persiste usuarios ni destinos WhatsApp.
-Una versión desconocida se rechaza sin reescribirla.
+GPSFix se conserva en gps_fix, y la identidad en vehicle_id. Labels y flota del
+catálogo vigente no se aplican a las filas históricas: la proyección del collector
+usa los campos del reporte recibido. No se almacena el payload XML ni autenticación.
+Metadatos inexistentes en filas antiguas permanecen NULL, sin backfill ficticio.
 
-"Crudo" significa campos disponibles después del parser actual: no es una copia
-byte a byte de LoadDataLog. Se conserva markup de Zones y Location; las fechas
-y coordenadas mantienen las conversiones previas. No se inventa zona horaria
-para Fecha; no puede afirmarse una diferencia temporal absoluta con acquired_at
-sin resolver esa limitación del proveedor. acquired_at usa el reloj centralizado,
-es aware y se serializa en UTC independientemente del timezone del host.
+## Identidad, campañas y permanencia
 
-## Frecuencia y permanencia
+La clave persistente es SHA-256 del proveedor, VEH_ID, instante GPS y contenido
+GPS normalizado: coordenadas, velocidad, ignición, GPSFix, zonas normalizadas y
+originales, y ubicación reportada. Nombres, placa, flota, FechaServidor y el Id del
+proveedor no generan por sí solos una nueva observación. Una colisión del mismo
+instante con otro contenido se conserva; un Id repetido no sustituye VEH_ID.
+El hash representa igualdad de campos, no autenticidad del proveedor.
 
-El polling predeterminado es 30 segundos. El mismo coordinador se activa mientras
-hay vigilancias, solicitudes pendientes **o una sesión de recolección activa**.
-El collector no tiene un temporizador de consultas GPS propio. Una adquisición
-por ciclo sirve a watches y colección simultáneamente. El CLI de sesiones solo
-modifica SQLite: requiere el servidor ejecutándose para adquirir snapshots.
-Las consultas puntuales de ubicación/sede siguen siendo independientes del polling,
-como antes, y no alimentan este collector ni se convierten en una caché operacional.
+La clave se busca en todo el histórico, no solo en la última fila. El heartbeat
+no genera filas GPS idénticas. Los argumentos/variables HEARTBEAT heredados siguen
+aceptándose por compatibilidad de configuración, sin alterar la deduplicación.
+Una campaña posterior puede asociarse a un reporte conocido mediante
+collection_observations, sin duplicarlo ni modificar sus originales. Su received_at
+registra la primera recepción en esa campaña; no demuestra presencia continua.
 
-Se compara con la última observación almacenada del mismo VEHID. Cualquier cambio
-en un campo conservado produce otra fila (incluye timestamp, posición, ignición,
-velocidad sin umbral, GPSFix, nombres, Zones original/normalizada y dirección).
-Una observación idéntica produce una fila cada 300 segundos de adquisición por
-defecto. `GPS_EMI_COLLECTION_HEARTBEAT_SECONDS` ajusta ese intervalo positivo;
-`GPS_EMI_DATA_HEARTBEAT_SECONDS` se conserva como alias si la nueva variable no existe.
-La comparación está aislada por sesión y VEHID; la primera muestra de cada campaña
-se conserva aunque coincida con datos de una anterior.
-Sin VEHID no se deduplica ni se inventa identidad por placa. Una vuelta atrás
-del reloj de adquisición se conserva, no se descarta.
+El catálogo y la proyección operacional mantienen su propia semántica temporal;
+una fila histórica no reinicia un temporizador de vigilancia. El monitor conserva
+las reglas existentes hasta fase 5, incluido STALE diagnóstico.
 
-La deduplicación sobrevive reinicios porque lee la última fila de SQLite, no una
-caché de proceso. Los heartbeats prueban que se volvió a recibir ese reporte;
-**no prueban presencia física continua**. Datos obsoletos, interrupciones y pérdidas
-de captura deben considerarse al estudiar permanencia.
+## Persistencia y límites
 
-## Persistencia, concurrencia y fallos
+SQLite v3, WAL, timeout de bloqueo 250 ms, transacciones IMMEDIATE y una conexión
+por operación. La migración de observaciones/campañas es aditiva y transaccional.
+La tabla de claves indexa también observaciones legadas que tengan identidad y
+fecha, sin cambiar ni borrar duplicados históricos anteriores. Catálogo y eventos
+se preservan. Véase el procedimiento de reversión en [fase 4](widetech-official-phase4.md).
 
-`GPS_EMI_DATA_DB` predetermina `data/gps_observations.db` relativo al directorio
-de trabajo. El arranque crea carpeta/base/esquema en el escritor. La configuración
-se obtiene del entorno después de la carga de configuración habitual del servidor.
-No se carga .env en el módulo collector ni en la utilidad de exportación.
+GPS_EMI_DATA_DB conserva su valor predeterminado data/gps_observations.db relativo
+al cwd; configurar ruta absoluta compartida. Docker conserva /data en volumen
+persistente con UID 10001. No se ejecutó Docker ni se migró la base operativa en
+este encargo. No usar down -v para una campaña.
 
-Cada lote abre conexión, usa una transacción atómica y cierra la conexión en su
-propio thread; no se comparten conexiones SQLite. Timeout de bloqueo: 250 ms.
-SQLite usa WAL, transacciones IMMEDIATE y conexiones por operación/thread/proceso.
-Start/stop/status pueden ejecutarse desde otro proceso sobre el mismo volumen.
-No se modifica `/health`:
-sigue siendo liveness `{"status":"ok"}` sin consultar SQLite.
+La cola tiene 32 lotes. Encolar no inicia una escritura autorizada: el escritor
+registra admisión durable frente a la campaña vigente y después escribe el lote.
+Una admisión confirmada sobrevive stop/vencimiento y habilita el reintento del
+mismo token; la cola no admitida se revalida y puede descartarse tras el cierre.
+Hay un reintento local inmediato por lote (dos intentos en total), sin otro HTTP.
+Saturación, fallo persistente o cierre forzado pueden perder muestras. Un lote
+admitido no escrito queda identificado en collection_batches; no se promete
+recuperarlo tras una caída porque su contenido no se persiste en la cola.
+Los logs evitan filas y detalles de excepciones; /health sigue siendo liveness.
 
-Errores de inicialización/escritura se registran sin filas, excepciones internas,
-credenciales ni rutas; se reintenta con el siguiente snapshot. Un lote fallido se
-pierde; no hay reintentos que bloqueen las vigilancias. Si la cola se llena, se
-descarta el nuevo snapshot y se registra el aviso. No existe borrado automático.
-Un thread secundario verifica el estado persistido aproximadamente cada segundo,
-sin consultar GPS; el coordinador detecta activación en hasta unos dos segundos
-estando inactivo (o al finalizar un ciclo/backoff). Cada escritura vuelve a validar
-la sesión y la ventana de adquisición en transacción. El cierre detiene primero
-el polling y después permite hasta dos segundos para
-drenar la cola; un cierre forzado puede perder lo pendiente en memoria, mientras
-las transacciones ya confirmadas permanecen. No existe garantía de captura sin
-pérdidas ni de latencia cero de la copia en memoria.
+## Exportación
 
-Docker monta el volumen nombrado `gps-observations` en `/data` (Compose añade el
-prefijo del proyecto) y fija `GPS_EMI_DATA_DB=/data/gps_observations.db`.
-El directorio pertenece al UID/GID 10001, modo 0700; el proceso sigue sin root.
-La base sobrevive restart, down y up. **`docker compose down -v` elimina el
-volumen**. No usar esa opción para una campaña. El build excluye los datos.
-
-## Exportar
-
-PowerShell, sin cargar .env:
+Se conservan ambos comandos, sin cargar .env:
 
 ```powershell
 .\.venv\Scripts\python.exe -m gps_emi.analysis.export_observations --output observations.csv
-.\.venv\Scripts\python.exe -m gps_emi.analysis.export_observations --db data/gps_observations.db --output observations-period.csv --from 2026-09-24T00:00:00-05:00 --to 2026-09-25T00:00:00-05:00
+.\.venv\Scripts\python.exe -m gps_emi.collector export --session ID_MOSTRADO --output observations-session.csv
 ```
 
-En Docker:
+Destino nuevo, UTF-8, lectura SQLite mode=ro. Las columnas antiguas conservan su
+orden; las nuevas se agregan al final. La exportación por campaña añade
+session_received_at y resuelve la tabla de asociación. El reporte conserva su
+acquired_at inicial aunque se asocie a otra campaña. --from inclusivo y --to
+exclusivo requieren offset: en exportación global filtran acquired_at, y por
+campaña filtran su primera recepción (session_received_at). Exportaciones de bases
+v1/v2 previas siguen disponibles sin migración; sus columnas originales permanecen.
 
-```powershell
-docker compose --env-file NUL exec -T gps-emi python -m gps_emi.analysis.export_observations --output /data/observations.csv
-docker compose --env-file NUL cp gps-emi:/data/observations.csv ./observations.csv
-```
+Direcciones y zonas son texto no confiable: importar CSV como texto, nunca evaluar
+fórmulas. SQLite, WAL y CSV contienen datos operativos sensibles; restringir acceso,
+no publicarlos ni incorporarlos a Git. No hay cifrado ni purga automática añadidos.
 
-CSV UTF-8 con encabezados, campos JSON preservados y sin fingerprint interno.
-La conexión es `mode=ro`; no crea una base inexistente ni modifica registros.
-El archivo destino debe ser nuevo. `--from` inclusivo y `--to` exclusivo filtran
-**acquired_at**, requieren offset/Z y se convierten a UTC. No filtran por fecha
-GPS ni criterios analíticos. Con WAL, un export largo puede retrasar el checkpoint
-y aumentar el tamaño del WAL; los errores de escritura se notifican y aíslan.
+## Crecimiento
 
-Tratar direcciones y nombres como texto no confiable: el CSV conserva valores
-originales, incluidos posibles prefijos de fórmulas. Importar las columnas como
-texto en hojas de cálculo, no evaluar contenido como fórmulas.
+Las estimaciones antiguas dependían del heartbeat duplicado y ya no describen
+esta política. El tamaño depende de observaciones únicas, asociaciones de campañas,
+admisiones y eventos; medir con el piloto. Un GPS idéntico ocupa una sola fila nueva
+por identidad de contenido, pero las recepciones de lotes admitidos generan marcas
+técnicas. Sin análisis geográfico, clustering ni selección de flotas en esta fase.
 
-## Privacidad
+## Evidencia histórica anterior a fase 4
 
-Solo se serializa la lista explícita de campos técnicos de Vehicle, nunca Watches,
-owner_id, notification_target, teléfonos WhatsApp, conversaciones, nombres de
-usuarios, cookies, tokens, App Secret o payloads de autenticación. DB, journals,
-carpeta data y exportaciones observations*.csv están ignorados por Git. Mantener
-otros nombres de exportación fuera del repositorio y revisar antes de publicar.
-Estos datos de ambulancias siguen siendo operativos sensibles: restringir acceso
-al volumen y exportaciones; SQLite no cifra ni implementa control de acceso propio.
-
-## Crecimiento estimado (no medición de flota real)
-
-No se consultó GPSpace: no conocemos el número real de móviles ni el ritmo de
-cambio. Suponiendo **100 vehículos**, 24 horas de snapshots activos al día,
-heartbeat 300 s y **1–2 KB por fila incluyendo índices**:
-
-| Campaña | Reportes idénticos, 288 filas/vehículo/día | Cambio cada 30 s, 2880 filas/vehículo/día |
-|---|---|---|
-| 7 días | 202–403 MB | 2,02–4,03 GB |
-| 14 días | 403–806 MB | 4,03–8,06 GB |
-| 30 días | 864–1728 MB | 8,64–17,28 GB |
-
-Unidades decimales; multiplicar por N/100 para otra flota y por la fracción de
-tiempo de polling efectivo. Direcciones/markup extensos, duplicados sin VEHID,
-journals WAL y exportaciones pueden elevar el tamaño. Medir después de una campaña
-piloto; no se establece retención automática ni se presenta esta estimación como
-límite garantizado.
-
-## Análisis posterior
-
-El dataset permitirá estudiar ignition OFF, velocidad cero, GPSFix, permanencia,
-distancias a sedes, discrepancias con Zones, múltiples VEHID por región, drift,
-episodios estacionarios, clustering espacial, distribución de error y percentiles
-de distancia. No se implementa análisis espacial, mapas, geocercas alternativas ni
-se afirma que DBSCAN deba ser el algoritmo final. Nada de esto participa hoy en
-las decisiones operativas.
+Los resultados siguientes corresponden al comportamiento y versión de entonces;
+no validan la política nueva ni un despliegue actual.
 
 ## Validación local del 24/09/2026
 

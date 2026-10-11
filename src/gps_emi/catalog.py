@@ -78,7 +78,7 @@ class CatalogStore:
     def _connect(self):
         db = connect_database(self.path)
         try:
-            if db.execute('PRAGMA user_version').fetchone()[0] not in (0, 1, 2):
+            if db.execute('PRAGMA user_version').fetchone()[0] not in (0, 1, 2, 3):
                 raise ValueError('Versión de esquema no soportada.')
             with db:
                 db.execute('BEGIN IMMEDIATE')

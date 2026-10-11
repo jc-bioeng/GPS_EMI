@@ -87,7 +87,8 @@ entre CLI y servidor con el mismo GPS_EMI_STATE_DIR. No coordina otros hosts.
 No hay IPC; véase [fase 2](widetech-official-phase2-spec.md).
 
 Fase 3 separa políticas de consumo: consultas nacionales; nuevas vigilancias y
-collector exclusivamente Medellín. Las identidades se reconcilian aunque el GPS
+collector exclusivamente Medellín en aquel cierre. Fase 4 amplía solo el
+collector a nivel nacional; las vigilancias conservan Medellín. Las identidades se reconcilian aunque el GPS
 sea repetido/defectuoso. Renombrar conserva VEH_ID y vigilancia. Flota distinta
 confirmada termina la activa con FAILED/fleet_changed, sin llegada y sin callback
 proactivo WhatsApp. Flota desconocida o identidad duplicada no la termina.

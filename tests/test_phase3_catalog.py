@@ -76,7 +76,7 @@ def test_national_queries_and_explicit_medellin_consumers(tmp_path):
     assert get_vehicle_location_by_id(source, 'b').vehicle.plate == 'TEST-B'
     assert [r.vehicle.vehid for r in list_vehicles_at_site(source, EMI_SITES[0]).entries] == ['b']
     assert manager.active_count() == 1 and errors.call_count == 1
-    assert [v.vehid for v in collector.submit.call_args.args[0]] == ['a']
+    assert [v.vehid for v in collector.submit.call_args.args[0]] == ['a','b']
     assert {e.vehicle_id for e in central.peek().catalog.entries} == {'a','b','c'}
     fleet.close()
 
@@ -299,14 +299,15 @@ def test_additive_schema_compatible_with_campaigns_and_concurrent_writes(tmp_pat
         barrier.wait(); return sessions.record([row()],now)
     with ThreadPoolExecutor(max_workers=2) as pool:
         a,b = pool.submit(publish),pool.submit(collect)
-        assert a.result() and b.result() == 1
-    assert sql(catalog,'PRAGMA user_version') == [(2,)]
+        assert a.result() and b.result() == 0
+    assert sql(catalog,'PRAGMA user_version') == [(3,)]
     assert sql(catalog,'PRAGMA journal_mode') == [('wal',)]
-    assert sql(catalog,'SELECT collection_session_id FROM gps_observations ORDER BY id') == [(None,), (session,)]
+    assert sql(catalog,'SELECT collection_session_id FROM gps_observations ORDER BY id') == [(None,)]
+    assert sql(catalog,'SELECT session_id FROM collection_observations') == [(session,)]
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda _:catalog.apply(central.peek()),range(8)))
     assert sql(catalog,'SELECT count(*) FROM catalog_acquisitions') == [(1,)]
-    assert len(sql(catalog,'SELECT * FROM gps_observations')) == 2
+    assert len(sql(catalog,'SELECT * FROM gps_observations')) == 1
 
 
 def test_unknown_database_schema_is_not_migrated(tmp_path):

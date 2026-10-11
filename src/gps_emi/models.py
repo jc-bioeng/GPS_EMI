@@ -22,6 +22,13 @@ class Vehicle:
     zones_raw: str | None = None
     vehicle_name_raw: str | None = None
     vehicle_license_raw: str | None = None
+    fleet_name: str | None = None
+    fleet_raw: str | None = None
+    gps_original: str | None = None
+    server_original: str | None = None
+    provider_record_id: str | None = None
+    provenance: str | None = None
+    gps_instant: str | None = None
 
     @property
     def display_identifier(self) -> str:

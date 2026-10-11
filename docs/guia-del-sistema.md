@@ -1,8 +1,8 @@
 # Guía del sistema
 
 Estado revisado el 9 de octubre de 2026: base histórica `03ee209`, fase 1
-versionada en `eda2606`, fase 2 versionada en `24dae94` y fase 3 local
-con catálogo persistente y consultas nacionales.
+versionada en `eda2606`, fase 2 versionada en `24dae94` y fase 3 en `a171b37`. Fase 4 local añade collector nacional y campañas
+sin duplicación GPS; no está desplegada.
 Ver [índice y estado](README.md) y [manual de operación](operacion.md).
 
 ## Propósito y componentes
@@ -87,10 +87,12 @@ El mapping `WIDETECH_PLATE_FIELD`/`WIDETECH_MOBILE_FIELD` debe asignar
 explícitamente Movil y VEH_NAM, sin deducir placas por formato. Snapshot conserva
 originales, diagnósticos y procedencia; una fila inválida no congela las válidas.
 Las filas anteriores conservadas mantienen su versión y edad y no alimentan
-nuevas observaciones de vigilancias/collector. Cobertura siempre desconocida.
+nuevas observaciones de vigilancias/collector. Fase 4 separa observaciones recibidas
+de estado operativo: un reporte fuera de orden se guarda históricamente, pero no
+reemplaza la posición vigente ni avanza vigilancias. Cobertura siempre desconocida.
 La proyección oficial de consultas acepta el prefijo Ambulancias a nivel nacional.
-Vigilancias y collector conservan Medellín/Medellin; campañas nacionales siguen
-para fase 4. La vista de catálogo persiste antes de publicar y distingue presencia
+Vigilancias conservan Medellín/Medellin; en fase 4 el collector es nacional
+por el mismo prefijo oficial Ambulancias. La vista de catálogo persiste antes de publicar y distingue presencia
 de calidad GPS. No se confunde ausencia con reclasificación. Una flota distinta
 confirmada termina la vigilancia con causa interna fleet_changed, sin mensaje
 proactivo WhatsApp. Véase [fase 3](widetech-official-phase3.md).
@@ -148,11 +150,19 @@ fin planificado, o STOPPED por intervención. Reiniciar no prolonga la ventana:
 se recupera el tiempo restante o se reconoce la expiración. Consultar `status`
 puede inicializar/migrar el esquema y actualizar una expiración.
 
-El collector recibe copias por una cola limitada y escribe en su propio hilo;
-no incorpora un cliente GPS adicional. Guarda cambios y un heartbeat de datos
-idénticos (300 segundos por defecto) por sesión y vehículo. Revalida la ventana
-al escribir y descarta muestras que lleguen después de cierre/expiración. Cola
-saturada o errores SQLite pueden perder muestras sin detener las vigilancias.
+El collector recibe publicaciones nuevas por una cola limitada y escribe en su
+propio hilo; no incorpora un cliente GPS adicional. La clave global persistente
+por proveedor/VEH_ID/instante/contenido impide duplicados incluso tras reinicio;
+heartbeat y renombrados no crean otra fila. Otra campaña recibe una asociación a
+la observación conocida. Se preservan originales GPS, flota y procedencia recibidos,
+sin sustituirlos por metadatos actuales del catálogo.
+
+El inicio HTTP del snapshot excluye peticiones previas al inicio de campaña.
+La admisión durable del escritor se serializa con stop/vencimiento; una escritura
+admitida puede terminar después del cierre. La cola no admitida se revalida.
+Los reinicios dejan ventanas de interrupción sin afirmar el instante exacto de
+caída ni inventar observaciones. Esquema v3 aditivo, históricos previos intactos;
+[la fase 4](widetech-official-phase4.md) detalla transacciones, reintentos y reversión.
 
 SQLite usa WAL y transacciones cortas. La sesión y adquisición se registran en
 UTC con zona; la presentación usa America/Bogota. El timestamp GPS heredado de

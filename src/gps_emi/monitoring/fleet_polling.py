@@ -69,7 +69,8 @@ class FleetPolling:
             self.condition.notify_all()
         if self.collection_active():
             try:
-                self.collector.submit(self.source.bind(snapshot).get_vehicles(include_retained=False, purpose='collector'), snapshot.acquired_at)
+                self.collector.submit(self.source.bind(snapshot).get_vehicles(include_retained=False, purpose='collector'),
+                                      snapshot.acquired_at, started_at=snapshot.started_at)
             except Exception:
                 logger.warning('Collector no disponible; entrega omitida, sin detalles sensibles.')
 

@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from gps_emi.analysis.collector import ObservationStore, PassiveCollector, EXPORT_COLUMNS
+from gps_emi.analysis.collector import ObservationStore, PassiveCollector, EXPORT_COLUMNS, METADATA_COLUMNS
 from gps_emi.analysis.export_observations import main, timestamp
 from gps_emi.clock import acquisition_now
 from gps_emi.models import Vehicle
@@ -51,21 +51,18 @@ def test_schema_optional_fields_and_privacy(tmp_path):
     path = tmp_path / 'new' / 'gps.db'
     store = ObservationStore(path)
     store.initialize()
-    assert store.record([Vehicle('', ''), vehicle()], NOW) == 2
+    assert store.record([Vehicle('', ''), vehicle()], NOW) == 1
     data = rows(path)
-    assert data[0]['gps_reported_at'] is None
-    assert data[0]['latitude'] is None and data[0]['zones_raw'] is None
-    assert json.loads(data[0]['ignition']) is None
-    assert data[1]['gps_reported_at'] == GPS.isoformat()
-    assert data[1]['acquired_at'] == '2026-09-24T17:00:00.000000+00:00'
-    assert data[1]['zones_raw'].startswith('<B>')
-    assert json.loads(data[1]['zones']) == ['EMI_Medellin_Taller']
-    assert json.loads(data[1]['gps_fix']) == 0
+    assert data[0]['gps_reported_at'] == GPS.isoformat()
+    assert data[0]['acquired_at'] == '2026-09-24T17:00:00.000000+00:00'
+    assert data[0]['zones_raw'].startswith('<B>')
+    assert json.loads(data[0]['zones']) == ['EMI_Medellin_Taller']
+    assert json.loads(data[0]['gps_fix']) == 0
     with sqlite3.connect(path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 1
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 3
     forbidden = {'owner_id', 'notification_target', 'token', 'cookie', 'phone', 'conversation'}
     assert not forbidden.intersection(data[0])
-    assert set(data[0]) == set(EXPORT_COLUMNS) | {'fingerprint'}
+    assert set(data[0]) == set(EXPORT_COLUMNS + METADATA_COLUMNS) | {'fingerprint'}
 
 
 @pytest.mark.parametrize('changes', [
@@ -78,7 +75,7 @@ def test_schema_optional_fields_and_privacy(tmp_path):
 def test_every_change_is_retained(tmp_path, changes):
     store = ObservationStore(tmp_path / 'gps.db')
     store.record([vehicle()], NOW)
-    assert store.record([vehicle(**changes)], NOW + timedelta(seconds=30)) == 1
+    assert store.record([vehicle(**changes)], NOW + timedelta(seconds=30)) == (0 if set(changes) & {'plate','vehicle_name_raw','mobile_number'} else 1)
 
 
 def test_heartbeat_restart_and_vehicle_identity(tmp_path):
@@ -87,11 +84,11 @@ def test_heartbeat_restart_and_vehicle_identity(tmp_path):
     assert store.record([vehicle()], NOW) == 1
     assert store.record([vehicle()], NOW + timedelta(seconds=299)) == 0
     reopened = ObservationStore(path, 300)
-    assert reopened.record([vehicle()], NOW + timedelta(seconds=300)) == 1
+    assert reopened.record([vehicle()], NOW + timedelta(seconds=300)) == 0
     assert reopened.record([vehicle(vehid='synthetic-2')], NOW + timedelta(seconds=301)) == 1
-    assert reopened.record([vehicle(vehid='')], NOW) == 1
-    assert reopened.record([vehicle(vehid='')], NOW) == 1
-    assert len(rows(path)) == 5
+    assert reopened.record([vehicle(vehid='')], NOW) == 0
+    assert reopened.record([vehicle(vehid='')], NOW) == 0
+    assert len(rows(path)) == 2
 
 
 def test_aware_clock_and_reject_naive_acquisition(tmp_path):
@@ -222,7 +219,7 @@ def test_csv_readonly_filters_and_utf8(tmp_path):
         result = list(csv.DictReader(stream))
     assert len(result) == 2
     assert result[0]['reported_location'] == 'Dirección, número 0'
-    assert tuple(result[0]) == EXPORT_COLUMNS
+    assert tuple(result[0]) == EXPORT_COLUMNS + METADATA_COLUMNS
     assert path.read_bytes() == before
     assert main(['--db', str(path), '--output', str(path)]) == 1
     assert main(['--db', str(path), '--output', str(output)]) == 1
@@ -244,7 +241,7 @@ def test_export_empty_and_unbounded(tmp_path):
     store.initialize()
     empty = tmp_path / 'empty.csv'
     assert main(['--db', str(path), '--output', str(empty)]) == 0
-    assert empty.read_text(encoding='utf-8').strip() == ','.join(EXPORT_COLUMNS)
+    assert empty.read_text(encoding='utf-8').strip() == ','.join(EXPORT_COLUMNS + METADATA_COLUMNS)
     store.record([vehicle()], NOW)
     output = tmp_path / 'all.csv'
     assert main(['--db', str(path), '--output', str(output)]) == 0

@@ -1,8 +1,8 @@
-# Sesiones de colección y observabilidad
+# Campañas de colección y observabilidad
 
-No implementa clustering ni modifica geocercas, ArrivalMonitor, reglas de llegada,
-identidad VEHID o la UX de WhatsApp. El servidor utiliza el collector existente,
-ahora condicionado a una sesión persistida. No captura sin sesión activa.
+Fase 4 local, sin despliegue. Se reutilizan SessionStore, SessionCollector y el
+coordinador central; no existe cliente HTTP ni planificador GPS adicional.
+Captura oficial nacional por prefijo Ambulancias; las vigilancias siguen Medellín.
 
 ## Uso PowerShell
 
@@ -46,92 +46,86 @@ permanecen. SQLite no se expone por red. No ejecutar `down -v` si se quieren
 conservar datos. Para inspección operacional usar status y export, no volcar
 credenciales o bases completas a logs. CSV UTF-8 conserva zonas originales y
 normalizadas, tipos JSON y datos crudos; importar como texto en hojas de cálculo.
-El destino debe ser nuevo. `--from` inclusivo y `--to` exclusivo filtran acquired_at,
-con offset obligatorio. El exportador antiguo sigue funcionando para datos sin sesión.
+El destino debe ser nuevo. `--from` inclusivo y `--to` exclusivo filtran la primera
+recepción por campaña (global: acquired_at), con offset obligatorio. El exportador antiguo sigue funcionando para datos sin sesión.
 
-## Ciclo de vida y reinicio
+## Ciclo de vida y fronteras (TEC-04)
 
-Start persiste inmediatamente COLLECTING, started_at y planned_end_at en UTC aware.
-Los timestamps GPS siguen siendo naive tal como los interpretaba el parser.
-Status presenta fechas en America/Bogota e incluye cuenta de observaciones y
-VEHID distintos. No se deduce identidad por placa.
+Start persiste COLLECTING con started_at y planned_end_at UTC. No cambia una campaña
+activa ni extiende su duración. Solo una COLLECTING por base. La demanda se observa
+aproximadamente cada segundo en SQLite, sin HTTP propio. El servidor debe tener la
+misma base y única autoridad de adquisición; el CLI de campañas solo administra DB.
 
-El fin es persistente: al reiniciar no se reinicia la duración. Si queda plazo,
-el coordinador continúa la captura; si venció durante downtime, el siguiente
-chequeo marca COMPLETED con stopped_at igual al planned_end_at original. Stop
-marca STOPPED/manual y conserva datos; repetir stop no altera la fecha anterior.
-Ninguna terminación de colección detiene servidor, health o watches.
+El snapshot incluye started_at (inicio de HTTP) y acquired_at (fin). La ventana es
+[started_at de campaña, planned_end_at): deben caber el inicio y fin de adquisición.
+Una petición ya en vuelo al comenzar la campaña no se incorpora aunque termine
+después. Las marcas iguales al inicio son admitidas; se requiere reloj sincronizado.
+No hay entrega de caché previa ni de posiciones retenidas al iniciar campañas.
 
-Se descartan lotes pendientes procesados después de stop/vencimiento; se prefiere
-no agregar datos a una sesión finalizada. Un snapshot anterior al start o posterior
-al fin nunca se atribuye a ella. No se reconstruyen datos perdidos durante downtime.
-Watches siguen en memoria y no sobreviven al reinicio, como antes.
+La cola no confiere autorización de escritura. Al consumirla, el escritor abre
+BEGIN IMMEDIATE y verifica campaña vigente, ventana y reloj actual. Registra un
+collection_batches/token durable: ese es el inicio de escritura autorizado.
+Stop y admisión se serializan con SQLite. Stop anterior gana; admisión anterior
+permite completar el lote después de stop o vencimiento. La transacción de datos
+confirma observaciones, claves, asociaciones y estado written conjuntamente.
+Si falla, queda admitted y el mismo token puede reintentarse sin duplicar datos.
+No se extiende planned_end_at para drenar. Los lotes en cola sin admisión se
+rechazan al consumirlos después del cierre; no se confunden con escrituras iniciadas.
 
-Un error terminal de proveedor (incluido SESSION_EXPIRED) bloquea la demanda de
-esa sesión en el coordinador del proceso para no reintentar indefinidamente.
-La sesión conserva su plazo y aparecerá COLLECTING hasta terminar: ese estado
-**no garantiza muestras**. Revisar provider_status. Tras corregir la autenticación
-externamente, reiniciar el servicio permite reanudar el plazo restante, o se puede
-detener la campaña y crear otra. Los fallos transitorios mantienen el backoff existente.
+El worker intenta hasta dos veces cada lote, sin repetir adquisición. El cierre
+acotado intenta drenar la cola; una terminación forzada puede perder contenido no
+confirmado. No hay replay durable de payloads. Las marcas admitted sin written
+permiten reconocer trabajo incompleto, no inventar muestras recuperadas.
 
-## Logging y configuración
+## Reinicio e interrupciones (COL-04/05)
 
-Todos los entrypoints operacionales reutilizan `gps_emi.observability.configure_logging`:
-script `gpspace_loaddatalog.py`, módulo/console script CLI, servidor por módulo,
-console script y Docker, y CLI de sesiones. El exportador antiguo mantiene su salida
-de conteo sin trazas adicionales. No se instala un handler por importación.
+Al reiniciar, el lector de estado recupera la campaña vigente con su mismo fin.
+Si ya venció, pasa a COMPLETED con stopped_at=planned_end_at original. Stop manual
+queda STOPPED/manual e idempotente. Nada de esto restaura vigilancias ni detiene
+health/servidor al finalizar campaña.
 
-| Variable | Predeterminado | Uso |
-|---|---|---|
-| GPS_EMI_DATA_DB | data/gps_observations.db | Compose fija /data/gps_observations.db |
-| GPS_EMI_COLLECTION_HEARTBEAT_SECONDS | 300 | Cambios siempre se guardan; iguales cada heartbeat |
-| LOG_LEVEL | INFO | DEBUG/INFO/WARNING/ERROR; CLI conserva --log-level |
-| GPS_EMI_LOG_SUMMARY_SECONDS | 300 | Resumen del servidor; entero positivo, mínimo 1 s |
+collection_runtime registra el último contacto local con el estado por campaña.
+Un nuevo proceso registra en collection_interruptions una ventana entre ese
+contacto y el nuevo, acotada al fin de campaña; no afirma que todo ese intervalo
+fuera downtime ni conoce el instante exacto de caída. Primera conexión tardía usa
+started_at como límite de una ventana no observada, diferenciada por reason.
+Un status del CLI no se presenta como heartbeat del collector. No se inventan GPS
+para esos periodos. Tras un error terminal del proveedor se conserva el plazo;
+COLLECTING no acredita respuestas ni muestras. Reparar autenticación es externo.
 
-En servidor y CLI operacional estas variables pueden venir del entorno habitual;
-los comandos de sesiones requieren entorno exportado o --db, sin leer .env.
-El heartbeat inválido deshabilita el collector y registra aviso; nivel inválido
-vuelve a INFO. El resumen usa contadores del proceso, no totales históricos; status
-ofrece los totales de la sesión en SQLite. La configuración de logs no imprime
-tokens ni headers, no vuelca payloads ni excepciones autenticadas.
+## Deduplicación y exportación
 
-Ejemplos ilustrativos, no datos reales:
+Observaciones GPS únicas entre campañas y reinicios. Cambiar solo nombre/flota/Id
+no crea otro GPS. Otra campaña recibe una asociación a la observación existente;
+status cuenta asociaciones y VEH_ID distintos de esa campaña. No se duplican filas
+por heartbeat. Reportes nuevos fuera de orden se conservan como historical; una
+colisión de timestamp con contenido diferente se conserva y marca explícitamente.
 
-```text
-INFO: service started version=0.1.0 polling_seconds=30 summary_seconds=300
-INFO: provider_status=PROVIDER_OK
-DEBUG: acquisition completed records=50 vehicles=43 duration_ms=382.0
-WARNING: provider_status=NETWORK_ERROR
-INFO: provider recovered downtime_seconds=18.0
-ERROR: provider_status=SESSION_EXPIRED
-INFO: collection started session_id=<id> duration=86400 planned_end_at=<UTC>
-INFO: operational_summary uptime_seconds=300 provider_status=PROVIDER_OK acquisitions=10 provider_failures=0 vehicles_last_snapshot=43 active_watches=2 collection_session=COLLECTING observations_written=430 collector_errors=0 dropped_snapshots=0
-INFO: collection completed session_id=<id> duration=86400 observations=12540 vehicles=43
-```
+Ambos exportadores mantienen columnas originales, añadiendo metadatos al final.
+En exportación por campaña collection_session_id identifica la campaña solicitada,
+y session_received_at su primera recepción; acquired_at conserva la adquisición
+original del reporte. Los filtros temporales por campaña usan esa recepción, y
+los globales acquired_at. Las bases previas se exportan sin migración. Detalles en
+[collector](gps-collector.md) y [fase 4](widetech-official-phase4.md).
 
-Los logs reales incluyen timestamp Bogotá y nombre de logger. Cada ciclo va a DEBUG;
-INFO muestra cambios de estado, eventos y resúmenes. Watch IDs y VEHID permiten
-relacionar creación, transición, llegada y notificación sin registrar propietarios
-ni teléfonos. STALE es diagnóstico: no se cambió el criterio de aceptación existente.
-Los errores repetidos de estado/escritura SQLite se cuentan, con aviso al cambiar
-de estado y mensaje de recuperación. Los logs de órdenes ejecutadas mediante
-`docker exec` se ven en esa consola; el servidor también registra el estado observado.
+## Configuración, privacidad y límites
 
-Docker usa stdout con driver json-file rotado: 10 MB por archivo, tres archivos.
-Esto limita disco (~30 MB por contenedor), **no garantiza conservar meses de logs**.
-Para auditorías largas debe planearse archivado externo, fuera de este incremento.
-Recrear el contenedor aplica los cambios del driver.
+GPS_EMI_DATA_DB debe coincidir entre servidor y CLI; preferir ruta absoluta.
+Las variables GPS_EMI_COLLECTION_HEARTBEAT_SECONDS y GPS_EMI_DATA_HEARTBEAT_SECONDS
+son compatibilidad heredada (positivas), no autorizan duplicar GPS. Se mantienen
+LOG_LEVEL y GPS_EMI_LOG_SUMMARY_SECONDS para logs y resúmenes. Ningún log imprime
+credenciales, filas o payloads. El resumen es del proceso; status consulta SQLite.
 
-## Deuda y límites
+WAL requiere almacenamiento local adecuado; exportaciones largas pueden aumentar
+WAL. Cola de 32 lotes, bloqueo SQLite acotado y reintentos limitados no garantizan
+captura sin pérdidas. No hay retención automática, selección de flotas, geografía,
+fase 5 ni notificaciones proactivas nuevas. Para revertir una migración, consultar
+el procedimiento de backup y compatibilidad de [fase 4](widetech-official-phase4.md).
 
-Sin análisis espacial, auto-login, persistencia de watches ni garantías de entrega
-exactamente una vez. SQLite WAL requiere disco local/volumen adecuado, no un filesystem
-de red. Exportaciones largas pueden retrasar checkpoint y aumentar WAL. Cola limitada
-a 32 snapshots y timeout SQLite de 250 ms: saturación/errores pierden muestras pero
-no bloquean notificaciones. El servicio sigue healthy aunque collector falle.
-El reloj del host debe estar sincronizado; no se inventa timezone del GPS.
-El control verifica SQLite cada segundo; status calcula conteos indexados, cuyo
-costo crecerá con la campaña. No hay borrado automático ni recuperación de lotes fallidos.
+## Evidencia histórica anterior a fase 4
+
+Las pruebas siguientes acreditaron el incremento previo y su política de entonces.
+No deben interpretarse como validación de la nueva deduplicación/admisión.
 
 ## Validación del 02/10/2026
 

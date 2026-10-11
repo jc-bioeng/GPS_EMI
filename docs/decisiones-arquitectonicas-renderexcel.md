@@ -145,16 +145,24 @@ Las pruebas acompañan cada fase. La fase 6 no es el primer momento para probar.
 |---|---|---|---|
 | TEC-01 | Admisión de adquisiciones para contar ausencias | 3 (política aprobada el 9 de octubre) | Nuevas, no vacías, sin diagnósticos ni identidades duplicadas y con identidad/flota interpretables en todas las filas. Error/lote no apto reinicia secuencia. El usuario aceptó que no detecta recortes silenciosos; no certifica cobertura ni usa porcentajes. Véase [fase 3](widetech-official-phase3.md). |
 | TEC-02 | Mapping y normalización de etiquetas y nombres reales de flota | 1–3 | `VEH_ID`, prefijo Ambulancias y cobertura Medellín ya están aprobados. Falta verificar correspondencia exacta Movil/VEH_NAM y variantes observadas, sin deducir placa por formato. |
-| TEC-03 | Identidad de observación/deduplicación y colisiones de timestamp | 4 | Debe impedir duplicados, admitir históricos nuevos fuera de orden y mantener identidad por VEH_ID. |
-| TEC-04 | Admisión de lotes y drenaje de escrituras al terminar campaña | 4 | Concretar inicio de escritura/admisión y fronteras temporales conservando COL-02/03. No extender duración ni perder escrituras autorizadas por una carrera. |
+| TEC-03 | Identidad de observación/deduplicación y colisiones de timestamp | 4 (resuelto localmente) | Clave proveedor/VEH_ID/instante/contenido GPS; Id solo referencia. Igual instante con otro contenido se conserva y marca. Asociación entre campañas sin duplicar GPS. Véase [fase 4](widetech-official-phase4.md). |
+| TEC-04 | Admisión de lotes y drenaje de escrituras al terminar campaña | 4 (resuelto localmente) | Inicio HTTP posterior al inicio de campaña; admisión durable serializada con stop/vencimiento. Encolar no autoriza escritura. Los lotes admitidos se completan sin extender plazo. Véase [fase 4](widetech-official-phase4.md). |
 | TEC-05 | Secuencia exacta de confirmación tras interrupción | 5 | Tres observaciones nuevas y una notificación ya están aprobadas. Falta precisar reinicio de la secuencia, observaciones exteriores y estado posterior a la notificación. |
 | TEC-06 | Criterio de caída general confirmada y contabilidad del vencimiento | 5 | No equiparar automáticamente un HTTP 500, credenciales inválidas o fallo local con caída general de WideTech. |
 | TEC-07 | Mecanismo de autoridad única entre CLI y servidor/procesos | 2 | Resuelto en fase 2 mediante exclusión local verificable, sin IPC; CLI y servidor no operan simultáneamente con el mismo directorio de estado. No cubre otros hosts. Véase [especificación](widetech-official-phase2-spec.md). |
-| TEC-08 | Inventario de registros técnicos sujetos a retención y reversión de esquema | 4–6 | Los 30 días y las exclusiones ya están aprobados. Concretar tablas/archivos y procedimiento recuperable. |
+| TEC-08 | Inventario de registros técnicos sujetos a retención y reversión de esquema | 4–6 (avance fase 4) | Esquema v3, claves y asociaciones históricas permanentes; marcas de admisión/runtime técnicas. Reversión exige binario y backup compatibles, sin bajar user_version. Retención automática sigue fase 6. Véase [fase 4](widetech-official-phase4.md). |
 
 Resolver decisiones materiales al entrar en su fase, no pedir nuevamente el alcance nacional, los 30 segundos, la zona inicial, los cinco minutos, las doce horas o la retención aprobada.
 
 ## Estado de implementación posterior (separado de los acuerdos)
+
+**Decisión operacional del 11 de octubre de 2026:** el usuario aprobó iniciar
+una base de datos totalmente nueva, sin trasladar los datos del piloto. La
+conservación de esos datos no es requisito para el siguiente arranque. Esta
+excepción del piloto no revoca la conservación de futuros históricos/eventos ni
+el soporte aditivo del esquema. No se ha creado, sustituido ni borrado una base
+operativa mediante esta actualización documental; la configuración del nuevo
+destino corresponde al arranque posterior.
 
 Fase 2 está versionada en `24dae94`. Fase 3 se implementó localmente sin despliegue;
 su commit selectivo posterior, resultados y pruebas se documentan en
@@ -162,6 +170,10 @@ su commit selectivo posterior, resultados y pruebas se documentan en
 concreta del encargo y aprobación expresa del usuario, con el límite indicado.
 Los acuerdos CAT, DAT, VIG y APL permanecen intactos. No se aprueban propuestas
 sobre mostrar ausentes en selectores o bloquear nuevas vigilancias por ese estado.
+
+Fase 3 quedó versionada en `a171b37` antes de continuar fase 4. La implementación
+local de [fase 4](widetech-official-phase4.md) concreta TEC-03/04 y la parte de TEC-08
+necesaria, sin modificar los acuerdos ni acreditar despliegue o proveedor real.
 
 ## Evidencia externa y cierre de errores de fase 1
 

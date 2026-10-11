@@ -75,6 +75,8 @@ class Snapshot:
     operational: tuple[RecordState, ...] = ()
     identities: tuple[Identity, ...] = ()
     catalog: CatalogView | None = None
+    started_at: datetime | None = None
+    observations: tuple[RecordState, ...] = ()
 
     @property
     def usable_records(self):
@@ -104,6 +106,7 @@ def _reconcile(batch, previous, epoch, version, acquired):
               for s in previous.operational} if previous is not None else {}
     counts = Counter(r.vehicle_id for r in batch.records)
     diagnosed = {d.row for d in batch.diagnostics}
+    observations = []
     for index, row in enumerate(batch.records, 1):
         identity = row.vehicle_id
         reason = None
@@ -118,8 +121,14 @@ def _reconcile(batch, previous, epoch, version, acquired):
             if identity in states:
                 states[identity] = replace(states[identity], retained_reason=reason)
         else:
-            states[identity] = RecordState(row, epoch, version, acquired)
-    return tuple(states.values())
+            received = RecordState(row, epoch, version, acquired)
+            observations.append(received)
+            old = states.get(identity)
+            if old is not None and row.gps_timestamp < old.record.gps_timestamp:
+                states[identity] = replace(old, retained_reason='out_of_order')
+            else:
+                states[identity] = received
+    return tuple(states.values()), tuple(observations)
 
 
 class Coordinator:
@@ -238,6 +247,7 @@ class Coordinator:
         result = None
         error = None
         retry = None
+        started = self.utcnow()
         try:
             result = self.source.acquire()
             if isinstance(result, AcquisitionResult):
@@ -276,10 +286,14 @@ class Coordinator:
             if result is not None and error is None:
                 version = 1 if self._received is None else self._received.version+1
                 batch = result if isinstance(result, AcquisitionResult) else None
+                operational, observations = (_reconcile(batch, self._snapshot, self.epoch, version, acquired)
+                                             if batch else ((), ()))
                 self._received = Snapshot(self.epoch, version, acquired, batch,
                                           () if batch else tuple(replace(v, zones=tuple(v.zones)) for v in result),
-                                          _reconcile(batch, self._snapshot, self.epoch, version, acquired) if batch else (),
-                                          identities(batch, self.mapping) if batch else ())
+                                          operational,
+                                          identities(batch, self.mapping) if batch else (),
+                                          started_at=started,
+                                          observations=observations)
                 try:
                     if batch is not None and self.catalog is not None:
                         self._received = replace(self._received, catalog=self.catalog.apply(self._received))
@@ -410,13 +424,13 @@ class SnapshotSource:
             raise ValueError("Falta mapping explícito de etiquetas.")
         vehicles = []
         metadata = {v.vehicle_id: v for v in (snapshot.catalog.entries if snapshot.catalog else snapshot.identities)}
-        for state in snapshot.operational:
+        for state in (snapshot.observations if purpose == 'collector' else snapshot.operational):
             if state.retained_reason is not None and not include_retained:
                 continue
             row = state.record
-            identity = metadata.get(row.vehicle_id)
+            identity = metadata.get(row.vehicle_id) if purpose != 'collector' else None
             fleet = identity.fleet_name if identity and identity.fleet_name else row.fleet_name
-            allowed = bool(fleet and fleet.startswith('Ambulancias')) if purpose == 'query' else fleet in MEDELLIN_FLEETS
+            allowed = bool(fleet and fleet.startswith('Ambulancias')) if purpose in ('query', 'collector') else fleet in MEDELLIN_FLEETS
             if not allowed:
                 continue
             # Existing consumers compare naive Bogota wall times. Preserve the
@@ -428,7 +442,11 @@ class SnapshotSource:
                 gps_timestamp=gps, location=row.raw.get("Localizacion"), speed=row.speed,
                 ignition=row.ignition, gps_fix=row.gps_fix, zones=list(row.zones),
                 latitude=row.latitude, longitude=row.longitude, zones_raw=row.raw.get("Zones"),
-                vehicle_name_raw=row.raw.get("VEH_NAM"), vehicle_license_raw=row.raw.get("Movil")))
+                vehicle_name_raw=row.raw.get("VEH_NAM"), vehicle_license_raw=row.raw.get("Movil"),
+                fleet_name=row.fleet_name, fleet_raw=row.raw.get('fltName'),
+                gps_original=row.raw.get('FechaGPS'), server_original=row.raw.get('FechaServidor'),
+                provider_record_id=row.gps_record_id, provenance=row.source.method,
+                gps_instant=row.gps_timestamp.astimezone(timezone.utc).isoformat() if row.gps_timestamp else None))
         return vehicles
 
     def wait(self, timeout=120, *, after_version=None, stop_event=None):

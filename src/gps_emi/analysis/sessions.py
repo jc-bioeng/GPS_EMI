@@ -1,15 +1,15 @@
 """Sesiones persistentes; ningún acceso al proveedor GPS."""
-from datetime import datetime, timedelta
-from hashlib import sha256
+from datetime import timedelta
 import logging
-from queue import Empty
+from queue import Empty, Full
+from copy import deepcopy
 import re
 import time
 from uuid import uuid4
 
 from gps_emi.clock import acquisition_now
 from gps_emi.observability import metrics
-from .collector import ObservationStore, PassiveCollector, utc_text, observation, json_value, DATA_COLUMNS
+from .collector import ObservationStore, PassiveCollector, utc_text
 
 logger = logging.getLogger(__name__)
 
@@ -25,31 +25,39 @@ def duration_seconds(value):
 
 
 class SessionStore(ObservationStore):
-    def _connect(self):
-        db = super()._connect()
-        try:
-            db.execute('PRAGMA journal_mode=WAL')
-            db.execute('PRAGMA foreign_keys=ON')
-            with db:
-                db.execute('BEGIN IMMEDIATE')
-                db.execute('''CREATE TABLE IF NOT EXISTS collection_sessions (
-                    id TEXT PRIMARY KEY, started_at TEXT NOT NULL, planned_end_at TEXT NOT NULL,
-                    stopped_at TEXT, status TEXT NOT NULL,
-                    requested_duration_seconds INTEGER NOT NULL, created_at TEXT NOT NULL, stop_reason TEXT)''')
-                db.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_session ON collection_sessions(status) WHERE status='COLLECTING'")
-                columns = {row[1] for row in db.execute('PRAGMA table_info(gps_observations)')}
-                if 'collection_session_id' not in columns:
-                    db.execute('ALTER TABLE gps_observations ADD COLUMN collection_session_id TEXT REFERENCES collection_sessions(id)')
-                db.execute('CREATE INDEX IF NOT EXISTS observations_session_vehicle ON gps_observations(collection_session_id, vehicle_id, id DESC)')
-                db.execute('PRAGMA user_version=2')
-            return db
-        except Exception:
-            db.close()
-            raise
+    def _migrate_extra(self, db):
+        db.execute('''CREATE TABLE IF NOT EXISTS collection_sessions (
+            id TEXT PRIMARY KEY, started_at TEXT NOT NULL, planned_end_at TEXT NOT NULL,
+            stopped_at TEXT, status TEXT NOT NULL,
+            requested_duration_seconds INTEGER NOT NULL, created_at TEXT NOT NULL, stop_reason TEXT)''')
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_session ON collection_sessions(status) WHERE status='COLLECTING'")
+        columns = {row[1] for row in db.execute('PRAGMA table_info(gps_observations)')}
+        if 'collection_session_id' not in columns:
+            db.execute('ALTER TABLE gps_observations ADD COLUMN collection_session_id TEXT REFERENCES collection_sessions(id)')
+        db.execute('CREATE INDEX IF NOT EXISTS observations_session_vehicle ON gps_observations(collection_session_id, vehicle_id, id DESC)')
+        fresh = db.execute("SELECT 1 FROM sqlite_master WHERE name='collection_observations'").fetchone() is None
+        db.execute("""CREATE TABLE IF NOT EXISTS collection_observations (
+            session_id TEXT NOT NULL REFERENCES collection_sessions(id),
+            observation_id INTEGER NOT NULL REFERENCES gps_observations(id),
+            received_at TEXT NOT NULL, PRIMARY KEY(session_id,observation_id))""")
+        if fresh:
+            db.execute("""INSERT OR IGNORE INTO collection_observations
+                SELECT collection_session_id,id,acquired_at FROM gps_observations
+                WHERE collection_session_id IS NOT NULL""")
+        db.execute("""CREATE TABLE IF NOT EXISTS collection_batches (
+            token TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES collection_sessions(id),
+            started_at TEXT NOT NULL, acquired_at TEXT NOT NULL, admitted_at TEXT NOT NULL,
+            state TEXT NOT NULL CHECK(state IN ('admitted','written')))""")
+        db.execute("""CREATE TABLE IF NOT EXISTS collection_runtime (
+            session_id TEXT PRIMARY KEY REFERENCES collection_sessions(id),
+            epoch TEXT NOT NULL, last_observed_at TEXT NOT NULL)""")
+        db.execute("""CREATE TABLE IF NOT EXISTS collection_interruptions (
+            id INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES collection_sessions(id),
+            last_observed_at TEXT NOT NULL, detected_at TEXT NOT NULL, reason TEXT NOT NULL)""")
 
     @staticmethod
     def _counts(db, session):
-        return db.execute('SELECT count(*), count(DISTINCT NULLIF(vehicle_id,\'\')) FROM gps_observations WHERE collection_session_id=?', (session,)).fetchone()
+        return db.execute("SELECT count(*), count(DISTINCT NULLIF(o.vehicle_id,'')) FROM collection_observations c JOIN gps_observations o ON o.id=c.observation_id WHERE c.session_id=?", (session,)).fetchone()
 
     def _expire(self, db, now):
         expired = db.execute("SELECT id, requested_duration_seconds FROM collection_sessions WHERE status='COLLECTING' AND planned_end_at<=?", (now,)).fetchall()
@@ -100,33 +108,64 @@ class SessionStore(ObservationStore):
         finally:
             db.close()
 
-    def record(self, vehicles, acquired_at):
-        acquired = utc_text(acquired_at)
+    def admit(self, acquired_at, started_at, token):
+        acquired, started = utc_text(acquired_at), utc_text(started_at)
         db = self._connect()
-        inserted = 0
         try:
             with db:
                 db.execute('BEGIN IMMEDIATE')
-                self._expire(db, utc_text(acquisition_now()))
-                session = db.execute("SELECT id FROM collection_sessions WHERE status='COLLECTING' AND started_at<=? AND planned_end_at>?", (acquired, acquired)).fetchone()
-                if session is None:
-                    logger.debug('collection snapshot ignored reason=no_active_session')
+                existing = db.execute('SELECT session_id FROM collection_batches WHERE token=?', (token,)).fetchone()
+                if existing:
+                    return existing[0]
+                now = utc_text(acquisition_now())
+                self._expire(db, now)
+                session = db.execute("""SELECT id FROM collection_sessions
+                    WHERE status='COLLECTING' AND started_at<=? AND planned_end_at>?
+                    AND started_at<=? AND planned_end_at>?""", (started, acquired, now, now)).fetchone()
+                if session is None or acquired < started or acquired > now:
+                    return None
+                db.execute("INSERT INTO collection_batches VALUES (?,?,?,?,?,'admitted')",
+                           (token, session[0], started, acquired, now))
+                return session[0]
+        finally:
+            db.close()
+
+    def record(self, vehicles, acquired_at, *, started_at=None, token=None):
+        token = token or uuid4().hex
+        if self.admit(acquired_at, started_at or acquired_at, token) is None:
+            return 0
+        db = self._connect()
+        try:
+            with db:
+                db.execute('BEGIN IMMEDIATE')
+                sid, acquired, state = db.execute(
+                    'SELECT session_id,acquired_at,state FROM collection_batches WHERE token=?', (token,)).fetchone()
+                if state == 'written':
                     return 0
-                for vehicle in vehicles:
-                    values = observation(vehicle)
-                    fingerprint = sha256(json_value(values).encode('utf-8')).hexdigest()
-                    last = db.execute('SELECT acquired_at, fingerprint FROM gps_observations WHERE collection_session_id=? AND vehicle_id=? ORDER BY id DESC LIMIT 1',
-                                      (session[0], vehicle.vehid)).fetchone() if vehicle.vehid else None
-                    if last and last[1] == fingerprint:
-                        elapsed = (datetime.fromisoformat(acquired) - datetime.fromisoformat(last[0])).total_seconds()
-                        if 0 <= elapsed < self.heartbeat_seconds:
-                            logger.debug('collection observation ignored reason=duplicate')
-                            continue
-                    columns = ('acquired_at',) + DATA_COLUMNS + ('fingerprint', 'collection_session_id')
-                    db.execute(f'INSERT INTO gps_observations ({",".join(columns)}) VALUES ({",".join("?" for _ in columns)})', (acquired,) + values + (fingerprint, session[0]))
-                    inserted += 1
+                # Admission is durable: stop/expiry cannot revoke a begun write.
+                inserted = self._write(db, vehicles, acquired, sid)
+                db.execute("UPDATE collection_batches SET state='written' WHERE token=?", (token,))
             metrics.increment(observations_written=inserted)
             return inserted
+        finally:
+            db.close()
+
+    def checkpoint(self, epoch, session, now=None):
+        if session is None:
+            return
+        now = utc_text(now or acquisition_now())
+        db = self._connect()
+        try:
+            with db:
+                db.execute('BEGIN IMMEDIATE')
+                old = db.execute('SELECT epoch,last_observed_at FROM collection_runtime WHERE session_id=?', (session['id'],)).fetchone()
+                lower = old[1] if old else session['started_at']
+                upper = min(now, session['stopped_at'] or session['planned_end_at'])
+                if (old is None or old[0] != epoch) and lower < upper:
+                    db.execute('INSERT INTO collection_interruptions(session_id,last_observed_at,detected_at,reason) VALUES (?,?,?,?)',
+                               (session['id'], lower, upper, 'restart_window' if old else 'first_attachment_window'))
+                db.execute('INSERT INTO collection_runtime VALUES (?,?,?) ON CONFLICT(session_id) DO UPDATE SET epoch=excluded.epoch,last_observed_at=excluded.last_observed_at',
+                           (session['id'], epoch, now))
         finally:
             db.close()
 
@@ -135,6 +174,7 @@ class SessionCollector(PassiveCollector):
     def __init__(self, store, **kwargs):
         super().__init__(store, **kwargs)
         self.active_session = None
+        self.epoch = uuid4().hex
         self.failures = set()
         self.failure_counts = {}
 
@@ -161,6 +201,7 @@ class SessionCollector(PassiveCollector):
     def refresh(self):
         try:
             session = self.store.status()
+            self.store.checkpoint(self.epoch, session)
             old = self.active_session
             self.active_session = session if session and session['status'] == 'COLLECTING' else None
             if (old or {}).get('id') != (self.active_session or {}).get('id'):
@@ -171,13 +212,18 @@ class SessionCollector(PassiveCollector):
             self.active_session = None
             self.failed('state')
 
-    def submit(self, vehicles, acquired_at):
-        if not self.active:
-            return False
-        accepted = super().submit(vehicles, acquired_at)
-        if not accepted:
-            metrics.increment(dropped_snapshots=1)
-        return accepted
+    def submit(self, vehicles, acquired_at, *, started_at=None):
+        with self.lock:
+            if self.stopping.is_set() or not self.active:
+                return False
+            try:
+                self.queue.put_nowait((deepcopy(tuple(vehicles)), acquired_at,
+                                       started_at or acquired_at, uuid4().hex))
+                return True
+            except Full:
+                metrics.increment(dropped_snapshots=1)
+                logger.warning('Collector saturado; snapshot omitido.')
+                return False
 
     def _run(self):
         next_refresh = 0
@@ -186,12 +232,19 @@ class SessionCollector(PassiveCollector):
                 self.refresh()
                 next_refresh = time.monotonic() + 1
             try:
-                vehicles, acquired = self.queue.get(timeout=0.1)
+                vehicles, acquired, started, token = self.queue.get(timeout=0.1)
             except Empty:
                 continue
             try:
-                self.store.record(vehicles, acquired)
-                self.recovered('write')
+                for attempt in range(2):
+                    try:
+                        self.store.record(vehicles, acquired, started_at=started, token=token)
+                        self.recovered('write')
+                        break
+                    except Exception:
+                        if attempt:
+                            raise
+                        self.failed('write')
             except Exception:
                 self.failed('write')
             finally:

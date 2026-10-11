@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import sqlite3
 
-from .collector import DEFAULT_DB, EXPORT_COLUMNS, utc_text
+from .collector import DEFAULT_DB, EXPORT_COLUMNS, METADATA_COLUMNS, utc_text
 
 
 def timestamp(value):
@@ -25,23 +25,32 @@ def export_csv(db, output, start=None, end=None, *, session_id=None):
     connection = sqlite3.connect(db.as_uri() + '?mode=ro', uri=True)
     try:
         where, params = [], []
+        available = {row[1] for row in connection.execute('PRAGMA table_info(gps_observations)')}
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        associated = session_id is not None and 'collection_observations' in tables
+        columns = EXPORT_COLUMNS
+        if 'collection_session_id' in available:
+            columns += ('collection_session_id',)
+        columns += tuple(c for c in METADATA_COLUMNS if c in available)
+        expressions = [('c.session_id' if c == 'collection_session_id' and associated else 'o.'+c) for c in columns]
+        if associated:
+            columns += ('session_received_at',)
+            expressions += ['c.received_at']
         for operator, value in (('>=', start), ('<', end)):
             if value:
-                where.append('acquired_at ' + operator + ' ?')
+                where.append(('c.received_at' if associated else 'o.acquired_at') + ' ' + operator + ' ?')
                 params.append(value)
-        columns = EXPORT_COLUMNS
-        available = {row[1] for row in connection.execute('PRAGMA table_info(gps_observations)')}
-        if 'collection_session_id' in available:
-            columns = columns + ('collection_session_id',)
+        query = 'SELECT ' + ','.join(expressions) + ' FROM gps_observations o'
+        if associated:
+            query += ' JOIN collection_observations c ON c.observation_id=o.id'
         if session_id is not None:
             if not connection.execute('SELECT 1 FROM collection_sessions WHERE id=?', (session_id,)).fetchone():
                 raise ValueError('Sesión inexistente.')
-            where.append('collection_session_id=?')
+            where.append(('c.session_id' if associated else 'o.collection_session_id')+'=?')
             params.append(session_id)
-        query = 'SELECT ' + ','.join(columns) + ' FROM gps_observations'
         if where:
             query += ' WHERE ' + ' AND '.join(where)
-        cursor = connection.execute(query + ' ORDER BY acquired_at, id', params)
+        cursor = connection.execute(query + ' ORDER BY o.acquired_at, o.id', params)
         # No sobrescribir exportaciones existentes ni otros archivos locales.
         with output.open('x', encoding='utf-8', newline='') as stream:
             writer = csv.writer(stream)

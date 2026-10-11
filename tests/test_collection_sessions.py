@@ -81,7 +81,8 @@ def test_manual_stop_idempotent_and_no_session_no_data(store, clock):
     assert store.status()['observations'] == 1
     sid2 = store.start_session(3600)
     assert sid != sid2
-    assert store.record([vehicle()], clock[0]) == 1  # Dedup aislada por sesión.
+    assert store.record([vehicle()], clock[0]) == 0  # Asociación nueva, GPS único.
+    assert store.status()['observations'] == 1
 
 
 @pytest.mark.parametrize('changes', [
@@ -98,7 +99,7 @@ def test_conservative_dedup_and_heartbeat(store, clock, changes):
     changed = replace(original, **changes)
     assert store.record([changed], clock[0]) == 1
     clock[0] += timedelta(seconds=300)
-    assert SessionStore(store.path).record([changed], clock[0]) == 1
+    assert SessionStore(store.path).record([changed], clock[0]) == 0
 
 
 def test_migration_preserves_legacy_rows(store):
@@ -106,7 +107,7 @@ def test_migration_preserves_legacy_rows(store):
     old.record([vehicle()], NOW)
     store.start_session(30)
     with sqlite3.connect(store.path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 2
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 3
         assert db.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'
         assert db.execute('SELECT collection_session_id FROM gps_observations').fetchall() == [(None,)]
         names = {row[1] for row in db.execute('PRAGMA table_info(collection_sessions)')}
@@ -222,5 +223,5 @@ def test_external_stop_disables_submit_before_next_cycle(store):
     SessionStore(store.path).status(stop=True)
     collector.refresh()
     assert not collector.submit([vehicle()], NOW)
-    queued, stamp = collector.queue.get_nowait()
-    assert store.record(queued, stamp) == 0
+    queued, stamp, started, token = collector.queue.get_nowait()
+    assert store.record(queued, stamp, started_at=started, token=token) == 0
