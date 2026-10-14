@@ -70,6 +70,9 @@ def main(argv=None):
         reporter = SummaryReporter(watches.manager.active_count, runtime.coordinator.health)
         reporter.start()
         logger.info('service started version=%s polling_seconds=%s summary_seconds=%s', version('gps-emi'), args.interval, reporter.interval)
+        logger.info('acquisition mode=%s query_scope=%s watch_scope=medellin',
+                    'official' if args.official else 'legacy',
+                    'national_ambulances' if args.official else 'medellin')
         logger.info("Piloto WhatsApp disponible en %s:%s/webhook; una sola instancia.", args.host, args.port)
         server.run()
         return 0

@@ -57,29 +57,29 @@ def test_new_watches_feedback_one_snapshot_and_duplicate(runtime,wa_config):
 
 
 @pytest.mark.parametrize('sites', [EMI_SITES[:1], EMI_SITES[1:], EMI_SITES])
-def test_initial_inside_confirmation_keeps_watch_active(runtime, sites):
+def test_initial_inside_requires_consent_then_exit_and_return(runtime, sites):
     service, watches, source, messenger = runtime
     initial = replace(source.get_vehicles.return_value[0], zones=list(sites))
     source.get_vehicles.return_value = [initial]
     send(service, 'VIGILAR AMB-20')
     watches.polling.cycle()
     text = messenger.client.send_text.call_args.args[1]
-    assert 'La última posición reportada de AMB-20 · PJU886 corresponde a' in text
-    assert 'próxima llegada después de observar una salida' in text
+    assert 'La última posición reportada de AMB-20 · PJU886 está en' in text
+    assert 'salga y vuelva a entrar' in text
     assert 'Te avisaré cuando llegue' not in text
     if len(sites) == 2:
-        assert 'sin sede única' in text
+        assert 'Poblado' in text and 'Taller' in text
     else:
         assert ('Poblado' if sites == EMI_SITES[:1] else 'Taller') in text
-    assert len(watches.list_active(NUMBER)) == 1
-    recipient, choices = messenger.client.send_cancel_menu.call_args.args
-    assert recipient == NUMBER and len(choices) == 1
-    assert choices[0].watch_id == watches.list_active(NUMBER)[0].watch_id
+    assert not watches.list_active(NUMBER)
     source.get_vehicles.assert_called_once()
     messenger.client.send_template.assert_not_called()
     count = messenger.client.send_text.call_count
     watches.polling.cycle()
     assert messenger.client.send_text.call_count == count
+    send(service, '1')
+    watches.polling.cycle()
+    assert len(watches.list_active(NUMBER)) == 1
     source.get_vehicles.return_value = [replace(initial, zones=[], gps_timestamp=BASE+timedelta(seconds=30))]
     watches.polling.cycle()
     source.get_vehicles.return_value = [replace(initial, zones=[EMI_SITES[0]], gps_timestamp=BASE+timedelta(seconds=60))]
@@ -88,7 +88,7 @@ def test_initial_inside_confirmation_keeps_watch_active(runtime, sites):
     assert not watches.list_active(NUMBER)
 
 
-@pytest.mark.parametrize('timestamp, zones', [(BASE, []), (None, [EMI_SITES[0]])])
+@pytest.mark.parametrize('timestamp, zones', [(BASE, []), (None, [])])
 def test_initial_outside_or_unprocessed_report_keeps_original_confirmation(runtime, timestamp, zones):
     service, watches, source, messenger = runtime
     source.get_vehicles.return_value = [replace(source.get_vehicles.return_value[0], zones=zones, gps_timestamp=timestamp)]
@@ -104,9 +104,14 @@ def test_initial_inside_cancel_option_only_stops_selected_watch(runtime, wa_conf
     service, watches, source, messenger = runtime
     source.get_vehicles.return_value = [replace(v, zones=[EMI_SITES[0]]) for v in source.get_vehicles.return_value]
     send(service, 'VIGILAR AMB-20')
+    watches.polling.cycle()
+    send(service, '1')
+    watches.polling.cycle()
+    first_choice = watches.list_active(NUMBER)[0]
     send(service, 'VIGILAR AMB-18')
     watches.polling.cycle()
-    first_choice = messenger.client.send_cancel_menu.call_args_list[0].args[1][0]
+    send(service, '1')
+    watches.polling.cycle()
     tap(service, wa_config, 'cancel_watch:' + first_choice.watch_id)
     assert watches.manager.get_watch(NUMBER, first_choice.watch_id).status == WatchStatus.CANCELLED
     assert len(watches.list_active(NUMBER)) == 1
@@ -115,14 +120,13 @@ def test_initial_inside_cancel_option_only_stops_selected_watch(runtime, wa_conf
     messenger.client.send_template.assert_not_called()
 
 
-def test_initial_inside_cancel_option_failure_keeps_watch(runtime):
+def test_initial_inside_prompt_failure_does_not_create_watch(runtime):
     service, watches, source, messenger = runtime
-    messenger.client.send_cancel_menu.side_effect = WhatsAppError('timeout')
+    messenger.client.send_text.side_effect = WhatsAppError('timeout')
     source.get_vehicles.return_value = [replace(source.get_vehicles.return_value[0], zones=[EMI_SITES[1]])]
     send(service, 'VIGILAR AMB-20')
     watches.polling.cycle()
-    assert len(watches.list_active(NUMBER)) == 1
-    assert 'escribir DETENER' in messenger.client.send_text.call_args.args[1]
+    assert not watches.list_active(NUMBER)
 
 
 def test_initial_inside_accepts_numeric_cancellation(runtime):
@@ -130,9 +134,9 @@ def test_initial_inside_accepts_numeric_cancellation(runtime):
     source.get_vehicles.return_value = [replace(source.get_vehicles.return_value[0], zones=[EMI_SITES[0]])]
     send(service, 'VIGILAR AMB-20')
     watches.polling.cycle()
-    send(service, '1')
+    send(service, '2')
     assert not watches.list_active(NUMBER)
-    assert 'Vigilancia detenida' in messenger.client.send_text.call_args.args[1]
+    assert 'Operación cancelada' in messenger.client.send_text.call_args.args[1]
 
 
 def test_list_cancel_native_and_keep_other(runtime,wa_config):

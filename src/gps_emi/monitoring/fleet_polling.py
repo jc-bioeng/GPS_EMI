@@ -5,6 +5,7 @@ import logging
 from threading import Condition, Event, Lock, Thread
 
 from gps_emi.config import WatchConfig
+from gps_emi.sites import matching_sites
 from gps_emi.resolution import find_vehicle, find_vehicle_by_id, VehicleNotFoundError, AmbiguousVehicleError
 
 logger = logging.getLogger(__name__)
@@ -19,12 +20,13 @@ class WatchRequest:
     context_id: str | None = None
     deadline: float = 0
     cancel_generation: int = 0
+    confirmed_inside: bool = False
 
 
 class FleetPolling:
     def __init__(self, source_factory, manager, *, config=None, on_created=None,
                  on_error=None, on_terminal=None, on_selection=None, thread_factory=Thread,
-                 autostart=True, collector=None):
+                 autostart=True, collector=None, on_confirmation=None):
         self.source = source_factory()
         self.coordinator = self.source.coordinator
         self.manager, self.config = manager, config or WatchConfig()
@@ -33,6 +35,7 @@ class FleetPolling:
         self.manager.timing = self.coordinator.watch_timing
         self.on_created, self.on_error = on_created, on_error
         self.on_terminal, self.on_selection = on_terminal, on_selection
+        self.on_confirmation = on_confirmation
         self.collector = collector
         self.thread_factory, self.autostart = thread_factory, autostart
         self.condition, self.cycle_lock = Condition(), Lock()
@@ -88,7 +91,7 @@ class FleetPolling:
                 self.thread = self.thread_factory(target=self._run, name='gps-emi-fleet', daemon=True)
                 self.thread.start()
 
-    def request_watch(self, owner_id, identifier, notification_target, *, vehicle_id=None, context_id=None):
+    def request_watch(self, owner_id, identifier, notification_target, *, vehicle_id=None, context_id=None, confirmed_inside=False):
         if not identifier.strip():
             raise ValueError('Identificador vacío.')
         with self.condition:
@@ -97,7 +100,7 @@ class FleetPolling:
                 return False
             request = WatchRequest(owner_id, identifier.strip(), notification_target, vehicle_id, context_id,
                                    self.coordinator.monotonic()+self.coordinator.config.pending_timeout,
-                                   self.owner_generations.get(owner_id, 0))
+                                   self.owner_generations.get(owner_id, 0), confirmed_inside)
             self.pending.append(request)
             try:
                 self.start()
@@ -163,7 +166,7 @@ class FleetPolling:
             projected = (replace(snapshot, catalog=current.catalog, identities=current.identities)
                          if current is not None else snapshot)
             vehicles = self.source.bind(projected).get_vehicles(include_retained=False, purpose='watch')
-            created, errors, selections = [], [], []
+            created, errors, selections, confirmations = [], [], [], []
             with self.condition:
                 if self.closed:
                     return
@@ -176,7 +179,13 @@ class FleetPolling:
                         if not vehicle.vehid:
                             raise ValueError('Falta identidad técnica.')
                         vehicle = find_vehicle_by_id(vehicles, vehicle.vehid)
-                        created.append(self.manager.create_watch(request.owner_id, vehicle, request.notification_target))
+                        existing = any(w.vehicle_id == vehicle.vehid for w in self.manager.get_active_watches(request.owner_id))
+                        if (not existing and not request.confirmed_inside and matching_sites(vehicle.zones)
+                                and self.on_confirmation is not None):
+                            confirmations.append((request, vehicle))
+                            continue
+                        created.append(self.manager.create_watch(request.owner_id, vehicle, request.notification_target,
+                                                                 require_exit=request.confirmed_inside))
                     except VehicleNotFoundError:
                         errors.append((request, 'selected_unavailable' if request.vehicle_id is not None else 'not_found'))
                     except AmbiguousVehicleError as error:
@@ -198,6 +207,8 @@ class FleetPolling:
                 self._callback(self.on_error, request, code)
             for request, candidates in selections:
                 self._callback(self.on_selection, request, candidates)
+            for request, vehicle in confirmations:
+                self._callback(self.on_confirmation, request, vehicle)
 
     def _run(self):
         try:

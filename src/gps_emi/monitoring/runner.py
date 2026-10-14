@@ -9,6 +9,7 @@ from gps_emi.catalog import MEDELLIN_FLEETS
 from gps_emi.clock import operational_now
 from gps_emi.errors import AcquisitionError
 from gps_emi.models import Vehicle
+from gps_emi.sites import matching_sites
 from gps_emi.monitoring.arrival import ArrivalMonitor, DESTINATIONS
 from gps_emi.monitoring.continuity import Continuity
 from gps_emi.monitoring.observation import (
@@ -38,7 +39,7 @@ class _WatchEnded(Exception):
 class WatchRunner:
     def __init__(self, client: SnapshotSource, identifier: str, destination: str | None,
                  notifier: NotificationService, config: WatchConfig | None = None,
-                 *, sleep=None, now=None, on_resolved=None, stop_event=None):
+                 *, sleep=None, now=None, on_resolved=None, stop_event=None, confirm_inside=None):
         if not identifier.strip():
             raise ValueError("Introduzca una placa o número de móvil.")
         if destination is not None and destination not in DESTINATIONS:
@@ -51,6 +52,7 @@ class WatchRunner:
         self.sleep = sleep  # Accepted for API compatibility; the runner never sleeps.
         self.now = now if now is not None else local_now
         self.on_resolved = on_resolved
+        self.confirm_inside = confirm_inside
         self.stop_event = stop_event
         self.failure_code = None
         self.monitor: ArrivalMonitor | None = None
@@ -191,13 +193,30 @@ class WatchRunner:
                     self.failure_code = "not_found" if isinstance(error, VehicleNotFoundError) else "ambiguous"
                     logger.error("%s Vigilancia detenida.", error)
                     return 1
+                require_exit = bool(matching_sites(vehicle.zones)) and self.confirm_inside is not None
+                if require_exit:
+                    offered_at = self.client.coordinator.monotonic()
+                    if (not self.confirm_inside(vehicle) or
+                            self.client.coordinator.monotonic() - offered_at >= 300):
+                        self.failure_code = 'confirmation_cancelled'
+                        logger.info('Vigilancia no iniciada: confirmación cancelada o vencida.')
+                        return 0
+                    # The user may take time to answer. Revalidate the same ID
+                    # against the latest publication, without a separate HTTP call.
+                    try:
+                        vehicle = find_vehicle_by_id(self.client.bind(self.client.coordinator.peek()).get_vehicles(
+                            include_retained=False, purpose='watch'), vehicle.vehid)
+                    except VehicleResolutionError:
+                        self.failure_code = 'selected_unavailable'
+                        logger.info('Vigilancia no iniciada: identidad seleccionada no disponible.')
+                        return 1
                 self.vehid = vehicle.vehid
                 self._published(self.client.coordinator.peek())
                 if self._fleet_changed.is_set():
                     self.failure_code = 'fleet_changed'
                     return 1
                 self.monitor = ArrivalMonitor(vehicle.display_identifier, self.destination)
-                self.continuity = Continuity(self.client.coordinator.monotonic())
+                self.continuity = Continuity(self.client.coordinator.monotonic(), require_exit=require_exit)
                 logger.info("Identificador resuelto: VEHID=%s, placa=%s, móvil=%s.",
                             vehicle.vehid, vehicle.plate, vehicle.mobile_number)
                 if self.on_resolved is not None:
@@ -239,7 +258,7 @@ class WatchRunner:
 
 def watch_arrival(client: SnapshotSource, identifier: str, notifier: NotificationService,
                   config: WatchConfig | None = None, *, destination: str | None = None,
-                  sleep=None, now=None) -> int:
+                  sleep=None, now=None, confirm_inside=None) -> int:
     """Caso de uso de vigilancia a EMI; destination es compatibilidad explícita I2."""
     return WatchRunner(client, identifier, destination, notifier, config,
-                       sleep=sleep, now=now).run()
+                       sleep=sleep, now=now, confirm_inside=confirm_inside).run()

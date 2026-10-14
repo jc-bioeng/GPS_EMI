@@ -65,7 +65,7 @@ class WatchManager:
         self._watches = {}
         self.closed = False
 
-    def create_watch(self, owner_id, vehicle, notification_target):
+    def create_watch(self, owner_id, vehicle, notification_target, *, require_exit=False):
         if not owner_id or not notification_target or not vehicle.vehid:
             raise ValueError('Propietario, destino e identidad técnica requeridos.')
         with self._lock:
@@ -77,7 +77,7 @@ class WatchManager:
             watch = Watch(uuid4().hex, owner_id, vehicle.vehid, vehicle.mobile_number,
                           vehicle.plate, self.now(), notification_target,
                           ArrivalMonitor(vehicle.display_identifier))
-            watch.continuity = Continuity(self.monotonic())
+            watch.continuity = Continuity(self.monotonic(), require_exit=require_exit)
             self._watches[watch.watch_id] = watch
             logger.info('Watch creada watch_id=%s VEHID=%s.', watch.watch_id, watch.vehicle_id)
             return deepcopy(watch), True

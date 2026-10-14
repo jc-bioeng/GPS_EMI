@@ -64,7 +64,7 @@ def format_watch_started(watch):
         return ("👀 Vigilancia iniciada\n\n"
                 + f"La última posición reportada de {watch_identity(watch)} corresponde a {location}."
                 + "\n\n_La vigilancia seguirá activa para detectar una próxima llegada después de observar una salida._"
-                + "\n_Si no necesitas esperar otra llegada, puedes detener esta vigilancia con la lista siguiente o escribir DETENER._"
+                + "\n_Puedes detener esta vigilancia escribiendo DETENER._"
                 + "\n_Escribe VIGILANCIAS para gestionar tus vigilancias._")
     return ("👀 Vigilancia iniciada\n\n" + watch_identity(watch)
             + "\n\n_Te avisaré cuando llegue a una sede EMI._\n_Escribe VIGILANCIAS para gestionar tus vigilancias._")

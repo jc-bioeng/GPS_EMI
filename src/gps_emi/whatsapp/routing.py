@@ -1,6 +1,7 @@
 """Parser y máquina de estados independientes del transporte y de GPS."""
 from dataclasses import dataclass
 from enum import Enum
+import unicodedata
 
 from gps_emi.sites import EMI_SITES
 from . import formatting as fmt
@@ -23,9 +24,40 @@ class Command:
 
 SITES = {"POBLADO": EMI_SITES[0], "TALLER": EMI_SITES[1], "1": EMI_SITES[0], "2": EMI_SITES[1]}
 
+# Match whole command words, longest first; never normalize vehicle identifiers.
+COMMAND_ALIASES = {
+    'MENU': ('menu', 'inicio', 'principal', 'menu principal'),
+    'AYUDA': ('ayuda', 'help'),
+    'VIGILAR': ('vigilar', 'vigilancia', 'vigila', 'iniciar vigilancia', 'nueva vigilancia'),
+    'UBICACION': ('ubicacion', 'ubica', 'ubicar', 'localizar', 'localiza', 'consultar ubicacion'),
+    'VIGILANCIAS': ('vigilancias', 'gestionar vigilancias'),
+    'MISVIGILANCIAS': ('misvigilancias', 'mis vigilancias', 'ver vigilancias', 'listar vigilancias'),
+    'DETENER': ('detener', 'detener vigilancia', 'detener vigilancias', 'parar vigilancia', 'parar vigilancias'),
+    'CANCELAR': ('cancelar', 'cancela'),
+    'SEDE': ('sede', 'ver sede', 'consultar sede'),
+}
+
+
+def _command_key(word):
+    return ''.join(c for c in unicodedata.normalize('NFD', word.casefold())
+                   if not unicodedata.combining(c))
+
+
+def canonical_command(text):
+    words = text.strip().split()
+    normalized = [_command_key(word) for word in words]
+    aliases = sorted(((alias.split(), canonical) for canonical, variants in COMMAND_ALIASES.items()
+                      for alias in variants), key=lambda item: len(item[0]), reverse=True)
+    for prefix, canonical in aliases:
+        if normalized[:len(prefix)] == prefix:
+            parts = text.strip().split(maxsplit=len(prefix))
+            argument = parts[-1] if len(parts) > len(prefix) else ''
+            return canonical + (' ' + argument if argument else '')
+    return text
+
 
 def parse_command(text):
-    parts = text.strip().split(maxsplit=1)
+    parts = canonical_command(text).strip().split(maxsplit=1)
     if not parts:
         return None
     verb = parts[0].upper()

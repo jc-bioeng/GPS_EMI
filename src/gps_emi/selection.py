@@ -15,6 +15,7 @@ from gps_emi.queries import LocationResult, describe_vehicle
 class SelectionOperation(str, Enum):
     LOCATION = 'LOCATION'
     CREATE_WATCH = 'CREATE_WATCH'
+    CONFIRM_WATCH = 'CONFIRM_WATCH'
 
 
 class SelectionError(ValueError):
@@ -61,7 +62,9 @@ class PendingSelections:
                 return None
             # No fingir que dos filas con el mismo VEHID se pueden distinguir.
             ids = [v.vehid for v in candidates]
-            if len(ids) < 2 or any(not vid for vid in ids) or len(set(ids)) != len(ids):
+            minimum = 1 if operation == SelectionOperation.CONFIRM_WATCH else 2
+            if (len(ids) < minimum or (operation == SelectionOperation.CONFIRM_WATCH and len(ids) != 1)
+                    or any(not vid for vid in ids) or len(set(ids)) != len(ids)):
                 raise SelectionError('unavailable')
             candidates = deepcopy(tuple(candidates))
             if reports and tuple(r.vehicle.vehid for r in reports) != tuple(ids):

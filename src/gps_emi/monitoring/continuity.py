@@ -14,6 +14,7 @@ class Continuity:
     recovery_site: str | None = None
     recovery_count: int = 0
     expired: bool = False
+    require_exit: bool = False
 
     def tick(self, now, config, timing):
         # Individual monotonic duration is never discounted by an outage.
@@ -37,6 +38,19 @@ class Continuity:
             return assessment, None
         validator.last_processed_gps_timestamp = vehicle.gps_timestamp
         self.activity_at = now
+        if self.require_exit:
+            # An accepted watch that started inside must witness a fresh exit.
+            # Recovery inside is not a substitute for the user's requested trip.
+            sites = matching_sites(vehicle.zones)
+            monitor.actual_sites = sites
+            if sites:
+                return assessment, None
+            self.require_exit = False
+            self.interrupted = False
+            self.recovery_site, self.recovery_count = None, 0
+            monitor.state = MonitorState.INITIAL
+            observe_resolved_vehicle(monitor, vehicle, vehicle_id)
+            return assessment, None
         if not self.interrupted:
             return assessment, observe_resolved_vehicle(monitor, vehicle, vehicle_id)
         sites = matching_sites(vehicle.zones)

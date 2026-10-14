@@ -16,6 +16,7 @@ from gps_emi.notifications.console import ConsoleNotifier
 from gps_emi.errors import AcquisitionError
 from gps_emi.queries import get_vehicle_location, list_vehicles_at_site
 from gps_emi.resolution import VehicleResolutionError
+from gps_emi.sites import matching_sites
 
 logger = logging.getLogger('gps_emi.cli')
 
@@ -32,10 +33,18 @@ def positive_interval(value):
 
 def watch(client, identifier: str, destination: str | None, interval: float,
           notifier: NotificationService, sleep=None, *, now=None,
-          initial_backoff=5.0, max_backoff=30.0, stale_warning_seconds=300.0, inactivity_seconds=43200.0) -> int:
+          initial_backoff=5.0, max_backoff=30.0, stale_warning_seconds=300.0, inactivity_seconds=43200.0,
+          confirm_inside=None) -> int:
     config = WatchConfig(interval, initial_backoff, max_backoff, stale_warning_seconds, inactivity_seconds)
     return watch_arrival(client, identifier, notifier, config,
-                         destination=destination, sleep=sleep, now=now)
+                         destination=destination, sleep=sleep, now=now, confirm_inside=confirm_inside)
+
+
+def _confirm_inside(vehicle):
+    print(f'La última posición reportada de {vehicle.display_identifier} está en '
+          f'{", ".join(matching_sites(vehicle.zones))}. Hora GPS: {vehicle.gps_timestamp}.')
+    print('No garantiza su ubicación actual. Todavía no se ha iniciado la vigilancia.')
+    return input('¿Vigilar para que salga y vuelva a entrar? [s/N] (válido 5 minutos): ').strip().casefold() in ('s', 'si', 'sí')
 
 
 def _select_site() -> str:
@@ -72,7 +81,8 @@ def _execute(action, args, config) -> int:
                            "Omítalo para vigilar la llegada a cualquiera de las sedes EMI.")
         return watch(client, identifier, args.destination, config.polling_interval, ConsoleNotifier(),
                      initial_backoff=config.initial_backoff, max_backoff=config.max_backoff,
-                     stale_warning_seconds=config.stale_warning_seconds, inactivity_seconds=config.inactivity_seconds)
+                     stale_warning_seconds=config.stale_warning_seconds, inactivity_seconds=config.inactivity_seconds,
+                     confirm_inside=_confirm_inside)
     if action == "location":
         client = client.bind(client.wait())
         print(format_location(get_vehicle_location(client, identifier, config)))
@@ -89,7 +99,7 @@ def main(argv=None) -> int:
     parser.add_argument("--action", choices=("watch", "location", "site"),
                         help="Operación directa; sin argumentos se muestra el menú")
     parser.add_argument("--identifier", "--plate", dest="identifier",
-                        help="Placa o número de móvil de una ambulancia Medellín")
+                        help="Placa o móvil: consultas oficiales nacionales; vigilancias solo Medellín")
     parser.add_argument("--destination", choices=DESTINATIONS,
                         help="Obsoleto: vigilancia de una sola sede, compatibilidad I2")
     parser.add_argument("--site", choices=DESTINATIONS, help="Sede para consultar inventario")

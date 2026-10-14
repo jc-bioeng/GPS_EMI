@@ -3,12 +3,14 @@ import logging
 from threading import Thread
 
 from gps_emi.config import WatchConfig
+from gps_emi.acquisition import SnapshotSource
 from gps_emi.errors import AcquisitionError
 from gps_emi.monitoring.watches import WatchManager as DomainWatchManager
 from gps_emi.monitoring.fleet_polling import FleetPolling
 from gps_emi.queries import get_vehicle_location, get_vehicle_location_by_id, list_vehicles_at_site
 from gps_emi.selection import PendingSelections, SelectionOperation, SelectionError
 from gps_emi.resolution import VehicleNotFoundError, AmbiguousVehicleError
+from gps_emi.sites import matching_sites
 from . import formatting as fmt
 from .client import WhatsAppError
 from .config import normalize_number, WhatsAppConfigError
@@ -38,10 +40,12 @@ class WatchManager:
         self.selections = None
         self.selection_handler = None
         self.cancel_handler = None
+        self.confirmation_handler = None
         self.manager = DomainWatchManager(self._notify, watch_config)
         self.polling = FleetPolling(source_factory, self.manager, config=watch_config,
                                     on_created=self._created, on_error=self._error,
                                     on_selection=self._selection,
+                                    on_confirmation=self._confirmation,
                                     on_terminal=lambda watch: self._reply(watch.notification_target, fmt.format_watch_failed(watch)),
                                     thread_factory=thread_factory, autostart=autostart, collector=collector)
 
@@ -56,13 +60,10 @@ class WatchManager:
     def _created(self, watch, is_new):
         text = fmt.format_watch_started(watch) if is_new else fmt.format_watch_duplicate(watch)
         self._reply(watch.notification_target, text)
-        if is_new and watch.monitor.actual_sites:
-            try:
-                if self.cancel_handler is not None:
-                    self.cancel_handler(watch.notification_target, [watch])
-                self.messenger.cancel_menu(watch.notification_target, [watch])
-            except WhatsAppError as error:
-                logger.warning('Opción de cancelación no enviada: %s.', error.category)
+
+    def _confirmation(self, request, vehicle):
+        if self.confirmation_handler is not None:
+            self.confirmation_handler(request, vehicle)
 
     def _error(self, request, code):
         self._reply(request.notification_target, identifier_error(code, request.identifier))
@@ -86,6 +87,7 @@ class WatchManager:
     def start_selected(self, context, vehicle_id):
         return self.polling.request_watch(context.owner_id, context.original_identifier,
                                           context.notification_target, vehicle_id=vehicle_id,
+                                          confirmed_inside=context.operation == SelectionOperation.CONFIRM_WATCH,
                                           context_id=self.selections.current(context.owner_id) if self.selections else None)
 
     @property
@@ -129,6 +131,9 @@ class MessageService:
         self.watches.selections = self.selections
         self.watches.selection_handler = self._watch_selection
         self.watches.cancel_handler = self._set_cancel_choices
+        self.watches.confirmation_handler = self._watch_confirmation
+        self.watches.polling.request_valid = lambda request: (
+            not request.confirmed_inside or request.context_id == self.selections.current(request.owner_id))
         self.snapshot_source = None
         self.pending_queries = {}
 
@@ -170,6 +175,15 @@ class MessageService:
                 response = identifier_error('selected_unavailable' if operation == 'selected' else 'ambiguous', argument)
             except VehicleNotFoundError:
                 response = identifier_error('selected_unavailable' if operation == 'selected' else 'not_found', argument)
+                if isinstance(source, SnapshotSource):
+                    if source.snapshot().result is None:
+                        response += ('\nEste servidor usa el modo legado, limitado a Medellín. '
+                                     'Para consultas nacionales el administrador debe activar el modo oficial.')
+                    else:
+                        response += ('\nLa consulta oficial incluye ambulancias de todas las ciudades. '
+                                     'No hay una posición utilizable para ese identificador en el snapshot; '
+                                     'puede faltar en la respuesta o tener datos incompletos. '
+                                     'Prueba también con la placa y solicita revisión al administrador.')
             except Exception:
                 response = fmt.GPS_ERROR
             self._feedback(sender, response)
@@ -197,6 +211,21 @@ class MessageService:
     def _watch_selection(self, request, candidates):
         self._offer_selection(request.owner_id, SelectionOperation.CREATE_WATCH,
                               request.identifier, candidates, request.notification_target, request.context_id)
+
+    def _watch_confirmation(self, request, vehicle):
+        context = self.selections.offer(request.owner_id, SelectionOperation.CONFIRM_WATCH,
+            request.identifier, (vehicle,), request.notification_target, request.context_id)
+        if context is None:
+            return
+        sites = ', '.join(fmt.site_name(s) for s in matching_sites(vehicle.zones))
+        self.vehicle_choices[request.owner_id] = [
+            f'VEHICLE_SELECT {context.selection_id}:{context.choice_ids[0]}', 'CANCELAR']
+        self._feedback(request.notification_target,
+            f'La última posición reportada de {fmt.display(vehicle.mobile_number)} · {fmt.display(vehicle.plate)} está en {sites}.\n'
+            f'Hora GPS: {fmt.display(vehicle.gps_timestamp)}. No garantiza su ubicación actual.\n\n'
+            '¿Quieres iniciar la vigilancia para que salga y vuelva a entrar?\n'
+            '1. Sí, vigilar salida y regreso\n2. No, cancelar\n'
+            'Todavía no se ha iniciado. Confirmación válida por 5 minutos; MENU o CANCELAR la anulan.')
 
     def _feedback(self, sender, text):
         try:
@@ -268,7 +297,7 @@ class MessageService:
                     self._feedback(sender, '🔎 Consultando el registro seleccionado...')
                     self._query(sender, 'selected', vehicle_id, self.selections.current(sender))
                     return
-                elif context.operation == SelectionOperation.CREATE_WATCH:
+                elif context.operation in (SelectionOperation.CREATE_WATCH, SelectionOperation.CONFIRM_WATCH):
                     self._feedback(sender, '🔎 Buscando el registro seleccionado...')
                     if self.watches.start_selected(context, vehicle_id):
                         return

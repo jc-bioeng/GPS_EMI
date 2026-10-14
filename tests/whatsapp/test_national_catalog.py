@@ -1,5 +1,8 @@
 """The existing WhatsApp service consumes the national projection offline."""
 from dataclasses import replace
+import pytest
+from unittest.mock import Mock
+from snapshot_fakes import ScriptedSnapshots
 
 from gps_emi.whatsapp.service import MessageService, WatchManager
 from gps_emi.whatsapp.webhook import IncomingMessage
@@ -25,6 +28,45 @@ def test_national_query_selector_and_medellin_watch_only(tmp_path, wa_config, me
     watches.polling.cycle()
     assert not watches.list_active(NUMBER)
     assert central.metrics['requests'] == 1
+    watches.close()
+
+
+@pytest.mark.parametrize('city', ['Cali', 'Bogotá', 'Barranquilla', 'Bucaramanga'])
+@pytest.mark.parametrize('identifier', ['MOBILE-b', 'TEST-B'])
+def test_other_cities_resolve_by_plate_and_mobile_without_extra_http(tmp_path, wa_config, messenger, city, identifier):
+    central, source, clock, _ = rig(tmp_path, batch(record(), record('b', fltName='Ambulancias '+city)))
+    watches = WatchManager(lambda: source, messenger, wa_config, autostart=False)
+    service = MessageService(wa_config, messenger, watches, lambda: source)
+    step(central, clock)
+    for _ in range(2):
+        service.handle(IncomingMessage('query', NUMBER, 'UBICACION '+identifier, 1000000))
+        assert 'MOBILE-b' in messenger.client.send_text.call_args.args[1]
+    assert central.metrics['requests'] == 1
+    assert not watches.list_active(NUMBER)
+    watches.close()
+
+
+def test_official_missing_location_does_not_claim_medellin_only(tmp_path, wa_config, messenger):
+    central, source, clock, _ = rig(tmp_path, batch(record('b', fltName='Ambulancias Cali', FechaGPS='invalid')))
+    watches = WatchManager(lambda: source, messenger, wa_config, autostart=False)
+    service = MessageService(wa_config, messenger, watches, lambda: source)
+    step(central, clock)
+    service.handle(IncomingMessage('query', NUMBER, 'UBICACION MOBILE-b', 1000000))
+    assert 'todas las ciudades' in messenger.client.send_text.call_args.args[1]
+    assert 'posición utilizable' in messenger.client.send_text.call_args.args[1]
+    watches.close()
+
+
+def test_legacy_missing_location_explains_scope_without_http(wa_config, messenger):
+    source = ScriptedSnapshots(Mock(get_vehicles=Mock(return_value=[])))
+    source.coordinator.demand('test', True)
+    source.advance()
+    watches = WatchManager(lambda: source, messenger, wa_config, autostart=False)
+    service = MessageService(wa_config, messenger, watches, lambda: source)
+    service.handle(IncomingMessage('query', NUMBER, 'ubicar TEST-MISSING', 1000000))
+    text = messenger.client.send_text.call_args.args[1]
+    assert 'modo legado' in text and 'limitado a Medellín' in text
+    assert source.transport.get_vehicles.call_count == 1
     watches.close()
 
 
