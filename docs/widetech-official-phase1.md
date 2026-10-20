@@ -212,8 +212,8 @@ offline y reproduce el caso con texto sintético, sin copiar la respuesta.
 
 **Validación del cierre (ejecuciones nuevas):** `-m pytest -q
 tests/test_widetech_official.py`: **187 aprobadas en 1,69 s**. `-m pytest -q
---basetemp=$testTemp`: **892 aprobadas en 11,21 s**. Los comandos completos
-de intérprete, PYTHONPATH y temporal seguro figuran abajo. El conteo 851 de
+--basetemp=$testTemp`: **892 aprobadas en 11,21 s**. La plantilla de comandos figura abajo; la ruta personal del intérprete original
+se omite. Seleccionar un intérprete compatible disponible. El conteo 851 de
 la revisión anterior se mantiene solo como antecedente, no como resultado actual.
 
 En la revisión inicial del cierre faltaban en el archivo del adaptador el
@@ -234,7 +234,7 @@ que se selecciona una carpeta nueva bajo `.pytest_cache` en cada ejecución.
 
 ```powershell
 $env:PYTHONPATH='C:\GPS_EMI\.venv\Lib\site-packages;C:\GPS_EMI\src'
-$testPython='C:\Users\jjcor\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
+$testPython = (Get-Command python).Source # seleccionar intérprete compatible
 & $testPython -m pytest -q tests/test_widetech_official.py
 $testTemp=Join-Path 'C:\GPS_EMI\.pytest_cache' ('official-' + [guid]::NewGuid().ToString('N'))
 if (Test-Path -LiteralPath $testTemp) { throw 'La carpeta debe ser nueva' }

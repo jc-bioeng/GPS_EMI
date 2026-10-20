@@ -1,5 +1,10 @@
 # Fase 5 — continuidad, recuperación y vencimiento de vigilancias
 
+> Evidencia histórica de fase, posteriormente versionada en `0f97e1f`.
+> Las expresiones «sin commit/despliegue» inferiores describen el encargo original.
+> Para el estado actual consultar el [índice](README.md); no ejecutar sus planes
+> como autorización vigente.
+
 Implementación local del 11 de octubre de 2026 sobre fase 4, commit verificado
 `18d2661`. Se leyeron las decisiones del árbol de trabajo, incluidas las revisiones
 posteriores de VIG-07/TEC-06, que se conservan. No hay llamadas a WideTech/Meta,

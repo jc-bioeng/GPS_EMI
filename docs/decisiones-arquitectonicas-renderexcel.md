@@ -224,8 +224,10 @@ local de [fase 4](widetech-official-phase4.md) concreta TEC-03/04 y la parte de 
 necesaria, sin modificar los acuerdos ni acreditar despliegue o proveedor real.
 Fase 4 quedó versionada en `18d2661`. La [fase 5 local](widetech-official-phase5.md)
 aplica VIG-01–11 y concreta TEC-05/06 con las aprobaciones expresas registradas
-arriba: 1022 pruebas offline aprobadas en el cierre, sin commit ni despliegue.
-Su evidencia no acredita WideTech real, entrega WhatsApp ni Docker/Ubuntu.
+arriba: 1022 pruebas offline aprobadas en el cierre de implementación. Ese encargo
+no hizo commit ni despliegue; el commit selectivo posterior es `0f97e1f`. El ajuste
+de alta interior y alias quedó versionado en `a8f3f24`. La evidencia local no
+identifica la imagen de Oracle ni acredita aceptación externa completa.
 
 ## Evidencia externa y cierre de errores de fase 1
 
@@ -250,6 +252,23 @@ Su evidencia no acredita WideTech real, entrega WhatsApp ni Docker/Ubuntu.
 | STALE solo informativo para decidir llegada | VIG-10: datos antiguos no generan llegadas. |
 | Repetir una observación GPS por heartbeat | DAT-06/COL-07: no duplicar observaciones. |
 | Recuperar automáticamente vigilancias al reiniciar | VIG-08/APL-02: aplazado; campañas sí reanudan. |
+
+## Ajuste solicitado el 13 de octubre de 2026: alta reportada dentro de sede
+
+La solicitud expresa del usuario añade confirmación previa cuando el vehículo
+resuelto está reportado en cualquiera de las dos sedes. No crear vigilancia activa
+hasta aceptar; rechazar o vencer la confirmación no modifica vigilancias existentes.
+Reutilizar selección y VEH_ID, sin adquisición paralela. La aceptación pide salida
+y regreso: hasta observar exterior con GPS nuevo y fresco, la recuperación de
+presencia interior de TEC-05 no puede completar esta vigilancia. Después de esa
+salida vuelve a regir continuidad de fase 5. Las demás vigilancias mantienen TEC-05.
+Esta regla sustituye el aviso posterior al alta con opción de detenerla.
+
+Las variantes textuales solicitadas se resuelven en el parser existente. «Detener
+vigilancias» ofrece selección, no cancelación masiva. Las consultas de ambulancias
+de otras ciudades mantienen el alcance nacional ya aprobado; no extender a otras
+flotas ni cambiar automáticamente el modo legado. Detalle en
+[comandos WhatsApp](comandos-whatsapp.md). Implementación local no acredita despliegue.
 
 ## Cómo gestionar nueva deuda o hallazgos
 

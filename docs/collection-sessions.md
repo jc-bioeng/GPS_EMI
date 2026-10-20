@@ -1,6 +1,7 @@
 # Campañas de colección y observabilidad
 
-Fase 4 local, sin despliegue. Se reutilizan SessionStore, SessionCollector y el
+Referencia del subsistema de campañas implementado en fase 4 y vigente en `a8f3f24`.
+Las validaciones al final son históricas; no identifican el despliegue actual. Se reutilizan SessionStore, SessionCollector y el
 coordinador central; no existe cliente HTTP ni planificador GPS adicional.
 Captura oficial nacional por prefijo Ambulancias; las vigilancias siguen Medellín.
 
@@ -119,7 +120,8 @@ credenciales, filas o payloads. El resumen es del proceso; status consulta SQLit
 WAL requiere almacenamiento local adecuado; exportaciones largas pueden aumentar
 WAL. Cola de 32 lotes, bloqueo SQLite acotado y reintentos limitados no garantizan
 captura sin pérdidas. No hay retención automática, selección de flotas, geografía,
-fase 5 ni notificaciones proactivas nuevas. Para revertir una migración, consultar
+notificaciones proactivas nuevas. La continuidad de vigilancias de fase 5 está
+implementada en su propio subsistema; no cambia el plazo de campaña. Para revertir una migración, consultar
 el procedimiento de backup y compatibilidad de [fase 4](widetech-official-phase4.md).
 
 ## Evidencia histórica anterior a fase 4

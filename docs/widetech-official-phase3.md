@@ -1,5 +1,10 @@
 # Fase 3 — catálogo nacional, consultas y reclasificaciones
 
+> Evidencia histórica de fase, posteriormente versionada en `a171b37`.
+> Las expresiones «sin commit/despliegue» inferiores describen el encargo original.
+> Para el estado actual consultar el [índice](README.md); no ejecutar sus planes
+> como autorización vigente.
+
 Implementación local del 9 de octubre de 2026, sobre fase 2 versionada en
 `24dae94e5994889cb0c30f8e6ad3dbd0e71f6151`. Referencia de autoridad:
 [decisiones aprobadas](decisiones-arquitectonicas-renderexcel.md).

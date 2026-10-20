@@ -1,6 +1,10 @@
 # Manual de operación
 
-Revisión del 11 de octubre de 2026, reconciliada con fase 5 local. Estos comandos son instrucciones para el
+> Edición pública: identificadores sustituidos por ejemplos sintéticos (AMB-9001,
+> TEST-PLATE-A y similares). En relatos de validación son seudónimos, no
+> transcripciones de registros reales ni nuevas pruebas.
+
+Revisión documental del 19 de octubre de 2026, contrastada con `a8f3f24`. Estos comandos son instrucciones para el
 operador; documentarlos no implica ejecutarlos ni certificar un despliegue.
 Consultar [arquitectura](guia-del-sistema.md) y [estado de implementación](README.md).
 
@@ -37,8 +41,8 @@ Los dos modos comparten Coordinator y su política de adquisición. En modo ofic
 el arranque prepara de forma aditiva las tablas catalog_* antes de adquirir.
 Usar una ruta absoluta de GPS_EMI_DATA_DB común a CLI y servidor: su valor
 predeterminado relativo conserva compatibilidad, pero depende del cwd.
-Respaldar la base antes de una activación posterior. Este encargo solo migró bases
-temporales de pruebas; no iniciar el servicio sobre la base operativa para probar.
+Respaldar la base antes de una activación posterior. Las pruebas offline documentadas
+solo migraron bases temporales; no iniciar el servicio sobre la base operativa para probar.
 
 ## Consola y WhatsApp
 
@@ -46,7 +50,7 @@ Desde `C:\GPS_EMI`, con instalación y configuración existentes:
 
 ```powershell
 .\.venv\Scripts\python.exe gpspace_loaddatalog.py
-.\.venv\Scripts\python.exe gpspace_loaddatalog.py --action location --identifier amb20
+.\.venv\Scripts\python.exe gpspace_loaddatalog.py --action location --identifier amb9001
 .\.venv\Scripts\python.exe gpspace_loaddatalog.py --action site --site EMI_Medellin_Taller
 .\.venv\Scripts\python.exe gpspace_loaddatalog.py --action site --site "EMI Medellin_Poblado"
 .\.venv\Scripts\python.exe -m gps_emi.whatsapp.server
@@ -71,12 +75,13 @@ de sede; los atajos conversacionales se interpretan en WhatsApp.
 
 MENU presenta opciones numéricas: 1 vigilar, 2 ubicación, 3 sede, 4 ayuda y
 5 gestionar vigilancias. VIGILANCIAS ofrece 1 nueva, 2 listar, 3 detener y
-4 menú principal. También se pueden escribir `UBICACION amb20`, `VIGILAR AMB-20`
+4 menú principal. También se pueden escribir `UBICACION amb9001`, `VIGILAR AMB-9001`
 y `SEDE TALLER`. Ante ambigüedad, responder al número de la lista vigente.
 
-Si el móvil ya está dentro, el aviso inicial describe esa situación y ofrece
-cancelar; no constituye una llegada. Mantenerla requiere observar una salida
-antes de una futura entrada. `DETENER` permite escoger una vigilancia propia.
+Si el móvil está reportado dentro, se pide confirmación antes del alta. Rechazar
+o dejar vencer la confirmación no crea vigilancia. Al aceptar se exige exterior
+nuevo y fresco antes de llegada o presencia recuperada interior. Ver
+[comandos y confirmación](comandos-whatsapp.md). `DETENER` permite escoger una vigilancia propia.
 Un envío aceptado por Meta no prueba recepción en el teléfono.
 
 ## Continuidad y vencimiento de vigilancias
@@ -131,7 +136,7 @@ migrar mediante la API backup de SQLite o escritores detenidos; comprobar el
 respaldo con su binario compatible. Para revertir, detener escritores, preservar
 la base v3 y restaurar una copia previa verificada con el binario anterior. Los
 datos posteriores permanecen en la copia v3 para revisión; no reducir user_version
-ni borrar columnas para forzar compatibilidad. Este encargo solo usó bases temporales.
+ni borrar columnas para forzar compatibilidad. Las pruebas offline usaron bases temporales.
 
 Reiniciar conserva el plazo original y registra una ventana de interrupción;
 no recupera muestras perdidas. Una escritura admitida antes del cierre termina
@@ -175,10 +180,11 @@ aunque conserva campañas y datos en el volumen. No usar `down -v` si se deben
 conservar datos. Este contenedor no proporciona por sí solo dominio, HTTPS ni
 administración de VPS.
 
-La validación real de fase 2 en Docker/Ubuntu sigue pendiente: el último intento
-de consultar Docker no encontró el motor Linux. No se verificó UID 10001,
-permisos POSIX, persistencia de volumen ni flock en contenedor. El CMD existente
-no activa `--official`; activar el modo es una operación explícita posterior.
+El cierre histórico de fase 2 no verificó Docker/Ubuntu: su intento local no encontró
+el motor Linux. Posteriormente el operador reportó arranque en Oracle; ese reporte
+no acredita todos los escenarios de UID 10001, permisos POSIX, persistencia y flock.
+La guía de fase 6 mantiene las verificaciones por caso pendientes. El CMD base
+no activa `--official`; activar el modo es una operación explícita.
 
 Para respaldar SQLite, usar su API de backup o una copia consistente con escritores
 detenidos. Copiar únicamente el archivo `.db` mientras WAL está activo puede

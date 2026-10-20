@@ -1,5 +1,9 @@
 # Múltiples vigilancias en memoria
 
+> Edición pública: identificadores sustituidos por ejemplos sintéticos (AMB-9001,
+> TEST-PLATE-A y similares). En relatos de validación son seudónimos, no
+> transcripciones de registros reales ni nuevas pruebas.
+
 Antes: el adaptador WhatsApp reservaba un booleano `active` global y arrancaba un
 `WatchRunner` para una ambulancia. Después:
 
@@ -171,7 +175,7 @@ Prueba con la configuración real existente, sin compartir secretos:
 1. Reiniciar una única instancia con
    `.\.venv\Scripts\python.exe -m gps_emi.whatsapp.server` desde C:\GPS_EMI.
    Mantener el túnel y webhook ya configurados.
-2. Desde el número autorizado enviar VIGILAR AMB-20, VIGILAR AMB-18 y un tercer
+2. Desde el número autorizado enviar VIGILAR AMB-9001, VIGILAR AMB-9002 y un tercer
    identificador real confirmado. Esperar cada confirmación; si llegan durante
    polling/backoff, el feedback precede a una resolución diferida al próximo ciclo.
 3. Enviar MISVIGILANCIAS: deben aparecer las dos o tres. Solicitar de nuevo la
@@ -180,9 +184,11 @@ Prueba con la configuración real existente, sin compartir secretos:
    las demás siguen activas. Crear otra Watch del vehículo cancelado es válido.
 5. Observar movimientos operativos reales sin provocarlos para la prueba. Una
    transición reportada exterior → sede completa solo esa Watch y notifica una vez.
-   Si inicia dentro, debe observar salida antes de una llegada. No simular posiciones
+   Si está reportada dentro, confirmar primero el alta; rechazar no crea vigilancia.
+   Tras aceptar debe observar salida antes de una llegada, incluso si recupera señal
+   dentro de la sede. Ver [confirmación y comandos](comandos-whatsapp.md). No simular posiciones
    ni cambiar geocercas para forzar el resultado en producción.
-6. Probar MENU, UBICACION amb20 y SEDE TALLER mientras siguen vigilancias activas.
+6. Probar MENU, UBICACION amb9001 y SEDE TALLER mientras siguen vigilancias activas.
 7. Cerrar con Ctrl+C. Al reiniciar, MISVIGILANCIAS debe indicar que no hay activas.
 
 El test de integración usa tres vehículos y cuatro snapshots: cero llegadas,

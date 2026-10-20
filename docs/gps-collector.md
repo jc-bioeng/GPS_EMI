@@ -52,7 +52,8 @@ registra la primera recepción en esa campaña; no demuestra presencia continua.
 
 El catálogo y la proyección operacional mantienen su propia semántica temporal;
 una fila histórica no reinicia un temporizador de vigilancia. El monitor conserva
-las reglas existentes hasta fase 5, incluido STALE diagnóstico.
+la política de fase 5: GPS de más de 300 s no genera llegada ni actividad;
+GPSFix=0 sigue siendo diagnóstico. Ver [continuidad](widetech-official-phase5.md).
 
 ## Persistencia y límites
 

@@ -1,0 +1,6 @@
+# Artefactos documentales: preservar bytes al clonar y versionar.
+*.pdf binary
+*.png binary
+# Las huellas del PDF se calculan sobre estas fuentes canónicas.
+docs/comandos-whatsapp.md text eol=lf
+docs/operacion.md text eol=lf

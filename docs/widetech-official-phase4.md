@@ -1,5 +1,10 @@
 # Fase 4 — collector nacional y campañas
 
+> Evidencia histórica de fase, posteriormente versionada en `18d2661`.
+> Las expresiones «sin commit/despliegue» inferiores describen el encargo original.
+> Para el estado actual consultar el [índice](README.md); no ejecutar sus planes
+> como autorización vigente.
+
 Implementación local del 9 de octubre de 2026. Base: fase 3 versionada previamente,
 por indicación del usuario, en `a171b378eb29fba95094c316c01eb9e8f5b5c81d`.
 [Decisiones aprobadas](decisiones-arquitectonicas-renderexcel.md) prevalecen sobre

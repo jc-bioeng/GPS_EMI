@@ -1,9 +1,13 @@
 # Guía del sistema
 
-Estado revisado el 11 de octubre de 2026: base histórica `03ee209`, fase 1
-versionada en `eda2606`, fase 2 versionada en `24dae94` y fase 3 en `a171b37`. Fase 4 (`18d2661`) añade collector nacional y campañas
-sin duplicación GPS. Fase 5 local incorpora continuidad de vigilancias; sin despliegue.
-Ver [índice y estado](README.md) y [manual de operación](operacion.md).
+> Edición pública: identificadores sustituidos por ejemplos sintéticos (AMB-9001,
+> TEST-PLATE-A y similares). En relatos de validación son seudónimos, no
+> transcripciones de registros reales ni nuevas pruebas.
+
+Componentes, flujo y responsabilidades del código local `a8f3f24`, revisados el
+19 de octubre de 2026. Las fases 1–5 y el ajuste de alta interior están versionados;
+la imagen desplegada no fue inspeccionada. Ver [estado](README.md),
+[operación](operacion.md) y [decisiones aprobadas](decisiones-arquitectonicas-renderexcel.md).
 
 ## Propósito y componentes
 
@@ -54,6 +58,7 @@ flowchart TD
   B --> D[SQLite / sesión de recolección]
 ```
 
+La persistencia de catálogo del diagrama aplica solo al modo oficial.
 El webhook no consulta GPSpace. Inbox procesa comandos fuera de la petición HTTP.
 Coordinator es el único planificador y propietario del transporte GPS.
 FleetPolling distribuye publicaciones entre altas, vigilancias y collector;
@@ -80,7 +85,7 @@ La correspondencia **observada y utilizada por EMI/GPSpace** es:
 | `VEH_LCNS` | `mobile_number` |
 
 No es una garantía universal de WideTech. La flota operacional se restringe
-exactamente a `Ambulancias Medellin;44986;0` en el legado.
+exactamente al filtro exacto `TARGET_FLEET` del adaptador legado en el legado.
 
 En RenderExcel, `VEH_ID` es identidad y `Id` identifica el registro GPS.
 El mapping `WIDETECH_PLATE_FIELD`/`WIDETECH_MOBILE_FIELD` debe asignar
@@ -98,7 +103,7 @@ confirmada termina la vigilancia con causa interna fleet_changed, sin mensaje
 proactivo WhatsApp. Véase [fase 3](widetech-official-phase3.md).
 
 La resolución acepta placa o número de móvil, elimina espacios exteriores e
-ignora mayúsculas. El alias `amb20` permite encontrar `AMB-20`; no transforma
+ignora mayúsculas. El alias `amb9001` permite encontrar `AMB-9001`; no transforma
 arbitrariamente cualquier placa o nombre. La ausencia se informa y la ambigüedad
 no se resuelve por fecha, GPSFix o preferencia de nombres. La consola la rechaza;
 WhatsApp ofrece candidatos numerados y continúa por VEHID exacto.
@@ -114,9 +119,11 @@ aproximada. Location conserva su original y se limpia para mostrarla en WhatsApp
 
 ## Llegadas y estado
 
-La primera observación dentro de una sede establece el estado, **no genera una
-llegada retroactiva**. Se informa que ya estaba dentro y se permite cancelar la
-vigilancia. Para una llegada posterior debe observarse OUTSIDE → INSIDE. Cambiar
+La primera observación dentro de una sede **no genera llegada retroactiva**.
+CLI y WhatsApp piden confirmación antes de crear la vigilancia. Al aceptar se
+exige observar exterior con GPS nuevo y fresco; hasta entonces tampoco puede
+completarse por presencia recuperada interior. Ver [confirmación](comandos-whatsapp.md).
+Para una llegada posterior debe observarse OUTSIDE → INSIDE. Cambiar
 entre sedes sin observar exterior no equivale a esa transición; una pertenencia
 ambigua a ambas sedes no fuerza una sede ganadora.
 

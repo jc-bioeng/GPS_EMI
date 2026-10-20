@@ -1,5 +1,9 @@
 # Resolución ambigua con selección explícita
 
+> Edición pública: identificadores sustituidos por ejemplos sintéticos (AMB-9001,
+> TEST-PLATE-A y similares). En relatos de validación son seudónimos, no
+> transcripciones de registros reales ni nuevas pruebas.
+
 `resolve_vehicle()` devuelve NOT_FOUND, RESOLVED o AMBIGUOUS y conserva todos los
 Vehicles coincidentes, en el orden recibido, sin preferir DEMO/no DEMO, fechas,
 GPSFix ni posiciones. `find_vehicle()` conserva su contrato fail-safe: lanza
@@ -14,7 +18,7 @@ calculados mediante el mismo evaluador de las consultas. Al mostrar otra página
 la antigüedad se vuelve a calcular sobre el timestamp original, sin consultar GPS.
 
 ```text
-Coordinator → snapshot persistido → Vehicle → resolve_vehicle
+Coordinator → snapshot en memoria → Vehicle → resolve_vehicle
                        ├─ NOT_FOUND → respuesta segura
                        ├─ RESOLVED  → operación normal
                        └─ AMBIGUOUS → PendingVehicleSelection
@@ -95,38 +99,39 @@ Si los candidatos no tienen VEHID o comparten uno, se conserva el rechazo seguro
 no se presenta una selección que prometa distinguir identidades indistinguibles.
 No se deduplica ni modifica el inventario original.
 
-Ejemplo ilustrativo inspirado en PRU332, sin valores reales de sesión:
+Ejemplo ilustrativo inspirado en TEST-PLATE-B, sin valores reales de sesión:
 
 ```text
-⚠️ Encontré varios registros para PRU332.
+⚠️ Encontré varios registros para TEST-PLATE-B.
 
 Selecciona el móvil correcto para continuar.
 Página 1 de 1. Válida durante 5 minutos desde la primera lista.
 
-1. PRU332 DEMO
-PRU332 · 🟢 Hace 20 s · Ubicación A
+1. TEST-PLATE-B DEMO
+TEST-PLATE-B · 🟢 Hace 20 s · Ubicación A
 
-2. PRU332
-PRU332 · 🟢 Hace 40 s · Ubicación B
+2. TEST-PLATE-B
+TEST-PLATE-B · 🟢 Hace 40 s · Ubicación B
 
-3. PRU332-DEMO
-PRU332 · ⚠️ Hace 8 min · Ubicación C
+3. TEST-PLATE-B-DEMO
+TEST-PLATE-B · ⚠️ Hace 8 min · Ubicación C
 ```
 
-LOCATION: enviar UBICACION PRU332 → feedback → lista → responder 2 →
+LOCATION: enviar UBICACION TEST-PLATE-B → feedback → lista → responder 2 →
 «Consultando el registro seleccionado...» → lectura del snapshot compartido → última posición
 reportada del VEHID del segundo. No muestra datos del primero ni del tercero.
 
-CREATE_WATCH: enviar VIGILAR PRU332 → feedback → snapshot central → lista →
+CREATE_WATCH: enviar VIGILAR TEST-PLATE-B → feedback → snapshot central → lista →
 responder 2 → «Buscando el registro seleccionado...» → siguiente ciclo común
 → confirmación de Watch del segundo. Si ya está activa para ese propietario, se
 informa duplicado. No hay un polling por candidato ni consultas adicionales para
-construir la lista. Se conservan los mensajes de primera observación dentro de sede.
+construir la lista. Si está reportado dentro, se pide confirmación antes del alta y se exige salida
+fresca tras aceptar; ver [confirmación vigente](comandos-whatsapp.md).
 
 ## Validación manual pendiente y deuda
 
 Reiniciar una única instancia del servidor con la configuración existente. Desde
-un número autorizado, probar UBICACION PRU332 y VIGILAR PRU332 por separado.
+un número autorizado, probar UBICACION TEST-PLATE-B y VIGILAR TEST-PLATE-B por separado.
 Elegir explícitamente el registro conocido operacionalmente, sin asumir que el que
 no dice DEMO sea el correcto. Comprobar identidad, ubicación y lista de vigilancias.
 Probar una referencia antigua tras MENU y dejar otra oferta cinco minutos sin elegir:
@@ -134,7 +139,7 @@ ambas referencias deben rechazarse. Los números tras MENU corresponden al menú
 vigente, no a la lista anterior. Para vigilar el mismo VEHID de nuevo debe aparecer
 el aviso de vigilancia activa. No compartir credenciales ni contenidos de sesión.
 
-La suite usa tres vehículos sintéticos de VEHID diferentes con placa PRU332 y
+La suite usa tres vehículos sintéticos de VEHID diferentes con placa TEST-PLATE-B y
 selecciona el segundo. Incluye continuidad por VEHID tras cambios, desaparición,
 expiración, replay, propietarios, consumo concurrente, oferta tardía, paginación,
 firma, allowlist y deduplicación. No se valida Meta/GPSpace real con pytest.
