@@ -20,3 +20,14 @@ data/
 *.sqlite3-shm
 *.log
 observations*.csv
+
+# Configuración local y artefactos privados; las fuentes documentales siguen visibles.
+.env.*
+!.env.example
+/compose.official.yaml
+/compose.name.yaml
+/tmp/
+/output/*
+!/output/pdf/
+/output/pdf/*
+!/output/pdf/GPS_EMI-referencia-comandos.pdf
